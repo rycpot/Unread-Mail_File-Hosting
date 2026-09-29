@@ -53,6 +53,9 @@ body {
 button { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
+/* Temporary: marks the test release 0.6.1. */
+.update-test { font-size: 12px; font-weight: 500; color: var(--ok); }
+
 /* ---------- update banner ---------- */
 
 .update-bar {
