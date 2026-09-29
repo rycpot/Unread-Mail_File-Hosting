@@ -24,6 +24,7 @@
           <label class="row">
             <span>Check every</span>
             <select id="pollMinutes">
+              <option value="0.5">30 seconds</option>
               <option value="1">1 minute</option>
               <option value="2">2 minutes</option>
               <option value="5">5 minutes</option>
@@ -31,6 +32,8 @@
               <option value="15">15 minutes</option>
             </select>
           </label>
+          <p class="settings-note">Gmail, Outlook and Proton are checked at this interval. iCloud, Yahoo and AOL
+            update instantly (push) while the IMAP helper is connected.</p>
           <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
           <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
           <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>

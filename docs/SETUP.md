@@ -116,6 +116,10 @@ ever reads unread mail (headers of the newest 30), a body when you open an
 email, and the last 10 read emails when you open *Recently read*. Nothing is
 cached on disk.
 
+**Push:** while Chrome is running, the helper also keeps one connection per
+account open in IMAP IDLE mode, so new mail (or mail read elsewhere) shows up
+within about a second, without repeated sign-ins. It stops when Chrome quits.
+
 ### Install the helper (once, and again after updates)
 
 ```bash

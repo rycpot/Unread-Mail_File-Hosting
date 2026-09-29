@@ -26,13 +26,15 @@ import imaplib
 import json
 import os
 import re
+import socket
 import ssl
 import struct
 import subprocess
 import sys
+import threading
 import time
 
-VERSION = 1
+VERSION = 2
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -61,11 +63,15 @@ def read_message():
     return json.loads(sys.stdin.buffer.read(length).decode('utf-8'))
 
 
+_send_lock = threading.Lock()
+
+
 def send(obj):
     data = json.dumps(obj).encode('utf-8')
-    sys.stdout.buffer.write(struct.pack('<I', len(data)))
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
+    with _send_lock:  # watcher threads share stdout
+        sys.stdout.buffer.write(struct.pack('<I', len(data)))
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
 
 
 def reply(result):
@@ -528,6 +534,149 @@ def _logout(conn):
         pass
 
 
+# ---------- push: IMAP IDLE (RFC 2177) ----------
+#
+# In watch mode Chrome keeps the helper running through an open port. One
+# thread per account keeps a read-only IDLE connection to the INBOX and reports
+# {"event": "changed"} when the server announces new, removed or re-flagged
+# mail; the extension then refreshes that account. Nothing is downloaded here.
+
+IDLE_RENEW_S = 25 * 60  # servers may drop IDLE after 30 minutes
+CHANGE_RE = re.compile(rb'^\* \d+ (EXISTS|EXPUNGE|FETCH)\b', re.I)
+
+
+class Watcher(threading.Thread):
+    def __init__(self, provider, email_addr):
+        super().__init__(daemon=True)
+        self.provider = provider
+        self.email = email_addr
+        self.stopped = threading.Event()
+        self.sock = None
+
+    def emit(self, event, **extra):
+        if self.stopped.is_set():
+            return
+        send({'event': event, 'provider': self.provider, 'email': self.email, **extra})
+
+    def stop(self):
+        self.stopped.set()
+        sock = self.sock
+        if sock:
+            # shutdown() wakes a recv() blocked in the watcher thread; close()
+            # alone does not reliably do so.
+            for fn in (lambda: sock.shutdown(socket.SHUT_RDWR), sock.close):
+                try:
+                    fn()
+                except OSError:
+                    pass
+
+    def run(self):
+        backoff = 5
+        first = True
+        while not self.stopped.is_set():
+            try:
+                self.cycle(resync=not first)
+                backoff = 5
+                first = True  # a clean renewal needs no resync
+            except HelperError as e:
+                if self.stopped.is_set():
+                    return
+                if e.code == 'no_idle':
+                    self.emit('status', state='unsupported', message=str(e))
+                    return
+                self.emit('status', state='error', message=str(e))
+                self.stopped.wait(300 if e.code == 'auth' else backoff)
+                backoff = min(backoff * 2, 300)
+                first = False
+            except Exception as e:
+                if self.stopped.is_set():
+                    return
+                self.emit('status', state='reconnecting', message='{}: {}'.format(type(e).__name__, e))
+                self.stopped.wait(backoff)
+                backoff = min(backoff * 2, 300)
+                first = False
+
+    def cycle(self, resync):
+        conn = connect(self.provider, self.email)
+        try:
+            typ, data = conn.capability()
+            caps = set(_text(data[0]).upper().split()) if typ == 'OK' and data else set()
+            if 'IDLE' not in caps:
+                raise HelperError('no_idle', 'This server does not support push (IDLE)')
+            select_inbox(conn, readonly=True)
+            # From here the raw TLS socket is read directly, with timeouts, so
+            # stopping and renewing stay responsive (imaplib has no IDLE before
+            # Python 3.14).
+            self.sock = conn.sock
+            tag = conn._new_tag()
+            self.sock.sendall(tag + b' IDLE\r\n')
+            self.sock.settimeout(60)
+            buf = b''
+            idling = False
+            started = time.monotonic()
+            if resync:
+                self.emit('changed')  # catch up on anything missed while disconnected
+            while not self.stopped.is_set() and time.monotonic() - started < IDLE_RENEW_S:
+                try:
+                    chunk = self.sock.recv(65536)
+                except (socket.timeout, TimeoutError):
+                    continue
+                if not chunk:
+                    raise OSError('the server closed the connection')
+                buf += chunk
+                changed = False
+                while b'\r\n' in buf:
+                    line, buf = buf.split(b'\r\n', 1)
+                    if line.startswith(b'+') and not idling:
+                        idling = True
+                        self.emit('status', state='idle')
+                    elif line.startswith(tag):
+                        raise HelperError('imap', 'IDLE was refused: ' + _text(line))
+                    elif line.upper().startswith(b'* BYE'):
+                        raise OSError('the server ended the session')
+                    elif CHANGE_RE.match(line):
+                        changed = True
+                if changed and not self.stopped.is_set():
+                    self.emit('changed')
+            try:
+                self.sock.sendall(b'DONE\r\n' + conn._new_tag() + b' LOGOUT\r\n')
+            except OSError:
+                pass
+        finally:
+            try:
+                conn.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+
+def watch_loop(first_request):
+    watchers = {}
+
+    def apply(accounts):
+        wanted = {}
+        for a in accounts or []:
+            if a.get('provider') in SERVERS or os.environ.get('UNREAD_MAIL_IMAP_OVERRIDE'):
+                wanted[key(a['provider'], a['email'])] = (a['provider'], a['email'])
+        for k in list(watchers):
+            if k not in wanted:
+                watchers.pop(k).stop()
+        for k, (provider, email_addr) in wanted.items():
+            if k not in watchers:
+                w = Watcher(provider, email_addr)
+                watchers[k] = w
+                w.start()
+
+    apply(first_request.get('accounts'))
+    send({'event': 'ready', 'version': VERSION})
+    while True:
+        req = read_message()
+        if req is None:  # Chrome closed the port
+            os._exit(0)
+        if req.get('cmd') == 'watch':
+            apply(req.get('accounts'))
+
+
 COMMANDS = {
     'ping': lambda req: {'version': VERSION, 'platform': sys.platform,
                          'caCerts': tls_context().cert_store_stats().get('x509_ca', 0)},
@@ -550,6 +699,9 @@ def main():
     try:
         req = read_message()
         if req is None:
+            return
+        if req.get('cmd') == 'watch':
+            watch_loop(req)
             return
         handler = COMMANDS.get(req.get('cmd'))
         if not handler:

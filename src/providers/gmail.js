@@ -17,12 +17,21 @@ export const gmail = {
     return { email: (await res.json()).emailAddress };
   },
 
-  async fetchSummary(account) {
+  async fetchSummary(account, prev) {
     const [label, list] = await Promise.all([
       apiFetch(account, `${API}/labels/INBOX`),
       apiFetch(account, `${API}/messages?labelIds=INBOX&labelIds=UNREAD&maxResults=${MAX_MESSAGES_PER_ACCOUNT}`),
     ]);
-    return { unreadCount: label.messagesUnread ?? 0, messages: await headers(account, list.messages ?? []) };
+    // Headers of emails already listed last time are reused, so a check with
+    // no new mail costs two requests.
+    const known = new Map((prev?.messages ?? []).map((m) => [m.id, m]));
+    const refs = list.messages ?? [];
+    const fresh = await headers(account, refs.filter((r) => !known.has(r.id)));
+    const byId = new Map(fresh.map((m) => [m.id, m]));
+    const messages = refs
+      .map((r) => byId.get(r.id) ?? { ...known.get(r.id), read: false })
+      .sort((a, b) => b.date - a.date);
+    return { unreadCount: label.messagesUnread ?? 0, messages };
   },
 
   // The newest already-read inbox emails, fetched only when asked for.
