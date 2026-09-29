@@ -29,9 +29,16 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
    - **Audience**: user type **External**.
 4. **Data Access → Add or remove scopes**: add
    `https://www.googleapis.com/auth/gmail.modify`, save.
-5. **Audience → Publishing status**: click **Publish app** so it is **In production**.
-   Do **not** submit for verification. (In *Testing* status, Google expires access
-   every 7 days.) Unverified apps are allowed for personal use under 100 users.
+5. **Audience → Test users → Add users**: add each Gmail address you will connect.
+   Leave the publishing status on **Testing**.
+
+   *Why not "In production"?* Because Gmail scopes are restricted, the console only
+   allows **Publish app** once Branding also has a home page, a privacy policy link
+   and an authorized domain that you own. Testing mode needs none of these. Its one
+   downside is that Google may expire the grant after 7 days, in which case the
+   account shows **Signed out** and one click on **Sign in** fixes it. If that
+   becomes annoying, fill in those Branding fields and publish. Do not submit for
+   verification either way.
 6. **Clients → Create client**:
    - Application type: **Web application**
    - Authorized redirect URIs: `https://gnkolniepchhhfhnopbhgbnedkplhjjj.chromiumapp.org/`
@@ -41,7 +48,8 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
 
 When you add each Gmail account you will see **"Google hasn't verified this app"**.
 Click **Advanced → Go to Unread Mail (unsafe)**, then tick the Gmail permission box.
-This is expected for a personal, unverified app: the app is yours.
+This is expected for a personal, unverified app: the app is yours. (In Testing mode
+only addresses listed as test users can sign in; others get "Access blocked".)
 
 ## 2. Microsoft (Hotmail / Outlook.com)
 
