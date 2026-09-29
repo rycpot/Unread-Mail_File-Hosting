@@ -71,6 +71,9 @@ export async function updateBadge() {
     const suffix = m?.status === 'auth' ? ' (sign-in needed)' : m?.status === 'error' ? ' (error)' : '';
     lines.push(`${a.email}: ${m?.unreadCount ?? 0}${suffix}`);
   }
+  // Toolbar icon with its red dot only while there is unread mail.
+  const variant = total ? '' : 'plain-';
+  await chrome.action.setIcon({ path: Object.fromEntries([16, 32, 48, 128].map((n) => [n, `/icons/icon-${variant}${n}.png`])) });
   await chrome.action.setBadgeBackgroundColor({ color: needsAttention && total === 0 ? '#d97706' : '#d93025' });
   await chrome.action.setBadgeText({ text: total > 0 ? (total > 999 ? '999+' : String(total)) : needsAttention ? '!' : '' });
   await chrome.action.setTitle({ title: lines.join('\n') });

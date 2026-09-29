@@ -131,6 +131,10 @@ function renderTopbar() {
   $('total').hidden = total === 0;
   $('total').textContent = total > 999 ? '999+' : total;
   document.title = total ? `(${total}) Unread Mail` : 'Unread Mail';
+  // The icon's red dot means "unread mail"; show it only when there is some.
+  const iconFile = `../../icons/icon-${total ? '' : 'plain-'}32.png`;
+  if (!$('favicon').href.endsWith(iconFile.slice(5))) $('favicon').href = iconFile;
+  $('brandIcon').src = iconFile;
   $('lastChecked').textContent = lastChecked ? `Checked ${ago(lastChecked)}` : '';
   $('pollMinutes').value = String(state.settings.pollMinutes);
   $('markReadOnOpen').checked = state.settings.markReadOnOpen;

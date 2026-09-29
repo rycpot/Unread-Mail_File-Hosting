@@ -32,7 +32,13 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Unread Mail"
+    "default_title": "Unread Mail",
+    "default_icon": {
+      "16": "icons/icon-plain-16.png",
+      "32": "icons/icon-plain-32.png",
+      "48": "icons/icon-plain-48.png",
+      "128": "icons/icon-plain-128.png"
+    }
   },
   "content_scripts": [
     {
