@@ -642,7 +642,10 @@ async function bulkDelete() {
           unreadCount: Math.max(0, (m.unreadCount ?? 0) - dropped.filter((x) => !x.read).length),
         });
       }
-      for (const mid of ok) state.checked.delete(keyOf(id, mid));
+      for (const mid of ok) {
+        state.checked.delete(keyOf(id, mid));
+        forgetBody(id, mid);
+      }
       if (state.selected?.accountId === id && !state.selected.folder && ok.has(state.selected.messageId)) closeReader();
     }
   } finally {
@@ -879,6 +882,11 @@ async function updateCachedMessage(id, messageId, fn) {
 async function setRead(id, messageId, read, folder) {
   const a = state.accounts[id];
   await providers[a.provider].setRead(a, messageId, read, { folder });
+  const cached = bodies.get(bodyKey(id, messageId, folder));
+  if (cached) {
+    cached.isRead = read;
+    saveBodies();
+  }
   if (folder === 'spam') {
     const items = sectionItems('spam', id, messageId);
     if (items.length && items[0].read !== read) await adjustSpamUnread(id, read ? -1 : 1);
@@ -908,6 +916,7 @@ async function setRead(id, messageId, read, folder) {
 
 async function trashMessage(id, messageId, folder) {
   const a = state.accounts[id];
+  forgetBody(id, messageId, folder);
   if (folder === 'spam') {
     await providers[a.provider].trash(a, messageId, { folder });
     await leaveSpamMessage(id, messageId);
@@ -954,6 +963,7 @@ async function leaveSpamMessage(id, messageId) {
 
 async function notSpam(id, messageId) {
   const a = state.accounts[id];
+  forgetBody(id, messageId, 'spam');
   const failed = await providers[a.provider].notSpam(a, [messageId]);
   if (failed.length) throw new Error("Couldn't move it to the inbox. Try again.");
   await leaveSpamMessage(id, messageId);
@@ -970,6 +980,117 @@ function renderReaderEmpty() {
 let openSeq = 0;
 
 // list: the section key when opened from "Recently read" / "Spam".
+// ---------- email body cache ----------
+//
+// The last BODY_LIMIT emails opened or previewed (hovered), including
+// decrypted Proton emails, so opening them again is instant. Kept in memory
+// and in chrome.storage.session (memory only, cleared when Chrome quits),
+// never on disk. Hovering an email for a moment fetches its body ahead of the
+// click; fetching never marks an email read.
+
+const BODY_LIMIT = 30;
+const BODY_BYTES = 6e6; // total, within chrome.storage.session's 10 MB
+const ENTRY_BYTES = 1.5e6; // larger emails are cached without inline images
+const bodies = new Map(); // "<accountId>|<folder>|<messageId>" -> message, oldest first
+const bodySizes = new Map();
+const bodyLoads = new Map(); // same key -> promise of a fetch in progress
+const bodyKey = (id, messageId, folder) => `${id}|${folder ?? 'inbox'}|${messageId}`;
+
+function rememberBody(key, msg) {
+  bodies.delete(key);
+  bodies.set(key, msg);
+  bodySizes.set(key, JSON.stringify(serializeBody(msg)).length);
+  let total = [...bodySizes.values()].reduce((n, x) => n + x, 0);
+  for (const old of bodies.keys()) {
+    if (bodies.size <= BODY_LIMIT && total <= BODY_BYTES) break;
+    total -= bodySizes.get(old) ?? 0;
+    bodies.delete(old);
+    bodySizes.delete(old);
+  }
+  saveBodies();
+}
+
+function forgetBody(id, messageId, folder) {
+  const key = bodyKey(id, messageId, folder);
+  bodies.delete(key);
+  bodySizes.delete(key);
+  saveBodies();
+}
+
+function forgetAccountBodies(id) {
+  for (const key of [...bodies.keys()]) {
+    if (!key.startsWith(`${id}|`)) continue;
+    bodies.delete(key);
+    bodySizes.delete(key);
+  }
+  saveBodies();
+}
+
+function serializeBody(msg) {
+  const images = [...(msg.inlineImages ?? [])];
+  const withImages = { ...msg, inlineImages: images };
+  return JSON.stringify(withImages).length <= ENTRY_BYTES ? withImages : { ...msg, inlineImages: [], imagesDropped: true };
+}
+
+let bodyTimer;
+function saveBodies() {
+  clearTimeout(bodyTimer);
+  bodyTimer = setTimeout(() => {
+    const entries = [...bodies].map(([k, m]) => [k, serializeBody(m)]);
+    chrome.storage.session.set({ bodyCache: entries }).catch(() => {});
+  }, 500);
+}
+
+async function restoreBodies() {
+  try {
+    const { bodyCache } = await chrome.storage.session.get('bodyCache');
+    for (const [k, m] of bodyCache ?? []) {
+      bodies.set(k, { ...m, inlineImages: new Map(m.inlineImages ?? []) });
+      bodySizes.set(k, JSON.stringify(m).length);
+    }
+  } catch {
+    // no cache
+  }
+}
+
+// The full email, from the cache, a fetch already running, or the server.
+function fetchBody(id, messageId, folder) {
+  const key = bodyKey(id, messageId, folder);
+  const cached = bodies.get(key);
+  if (cached) {
+    if (cached.imagesDropped) {
+      // Inline images were too large to keep: fetch them again.
+      const a = state.accounts[id];
+      return loadInlineImages(providers[a.provider], a, cached).then((inlineImages) => ({ ...cached, inlineImages, imagesDropped: false }));
+    }
+    rememberBody(key, cached); // most recently used
+    return Promise.resolve(cached);
+  }
+  if (bodyLoads.has(key)) return bodyLoads.get(key);
+  const a = state.accounts[id];
+  const provider = providers[a.provider];
+  const load = (async () => {
+    const msg = await provider.getMessage(a, messageId, { folder });
+    msg.accountId = id;
+    msg.folder = folder;
+    msg.inlineImages = await loadInlineImages(provider, a, msg);
+    // A Proton email that could not be decrypted is not kept, so the next
+    // open tries again.
+    if (!msg.encrypted && state.accounts[id]) rememberBody(key, msg);
+    return msg;
+  })().finally(() => bodyLoads.delete(key));
+  bodyLoads.set(key, load);
+  return load;
+}
+
+let hoverTimer;
+function prefetchOnHover(button) {
+  clearTimeout(hoverTimer);
+  const { account: id, message: messageId, folder } = button.dataset;
+  if (!state.accounts[id] || bodies.has(bodyKey(id, messageId, folder))) return;
+  hoverTimer = setTimeout(() => fetchBody(id, messageId, folder).catch(() => {}), 250);
+}
+
 async function openMessage(id, messageId, { folder, list } = {}) {
   const seq = ++openSeq;
   state.selected = { accountId: id, messageId, folder, list };
@@ -977,16 +1098,10 @@ async function openMessage(id, messageId, { folder, list } = {}) {
   state.showRemoteImages = false;
   markSeen(keyOf(id, messageId));
   renderSidebar();
-  reader.innerHTML = `<div class="reader-status">Loading…</div>`;
+  if (!bodies.has(bodyKey(id, messageId, folder))) reader.innerHTML = `<div class="reader-status">Loading…</div>`;
 
-  const a = state.accounts[id];
-  const provider = providers[a.provider];
   try {
-    const msg = await provider.getMessage(a, messageId, { folder });
-    if (seq !== openSeq) return;
-    msg.accountId = id;
-    msg.folder = folder;
-    msg.inlineImages = await loadInlineImages(provider, a, msg);
+    const msg = await fetchBody(id, messageId, folder);
     if (seq !== openSeq) return;
     state.message = msg;
     renderReader();
@@ -998,6 +1113,7 @@ async function openMessage(id, messageId, { folder, list } = {}) {
     if (seq !== openSeq) return;
     const gone = e.status === 404;
     reader.innerHTML = `<div class="reader-status error">${gone ? 'This email no longer exists. It may have been deleted elsewhere.' : esc(e.message)}</div>`;
+    if (gone) forgetBody(id, messageId, folder);
     if (gone && !folder) updateCachedMessage(id, messageId, (m) => ({ message: null, unreadDelta: m.read ? 0 : -1 }));
   }
 }
@@ -1100,6 +1216,14 @@ async function withBusy(el, fn) {
   }
 }
 
+sidebar.addEventListener('mouseover', (e) => {
+  const button = e.target.closest('.msg[data-action="open"]');
+  if (button && !button.contains(e.relatedTarget)) prefetchOnHover(button);
+});
+sidebar.addEventListener('mouseout', (e) => {
+  if (e.target.closest('.msg[data-action="open"]') && !e.target.closest('.msg').contains(e.relatedTarget)) clearTimeout(hoverTimer);
+});
+
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) {
@@ -1166,6 +1290,7 @@ document.addEventListener('click', async (e) => {
           renderReaderEmpty();
         }
         const a = state.accounts[id];
+        forgetAccountBodies(id);
         await providers[a.provider].forgetAccount?.(a).catch(() => {});
         await removeAccount(id);
       }
@@ -1242,6 +1367,7 @@ setInterval(renderTopbar, 30000);
 
 state.view = loadView();
 await restoreSectionCache();
+await restoreBodies();
 await load();
 await fillClientIds();
 renderTopbar();
