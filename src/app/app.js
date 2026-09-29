@@ -1025,7 +1025,7 @@ function renderReaderToolbar() {
     ${msg.folder === 'spam' ? `<button class="tool-btn" data-action="not-spam">${icon.inbox}Not spam</button>` : ''}
     <button class="tool-btn danger" data-action="trash">${icon.trash}Delete</button>
     <span class="spacer"></span>
-    ${msg.webUrl ? `<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button>` : ''}`;
+    ${msg.webUrl ? `<span class="open-web">${pico(state.accounts[msg.accountId]?.provider, 'open-web-icon')}<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button></span>` : ''}`;
 }
 
 async function downloadAttachment(index) {
