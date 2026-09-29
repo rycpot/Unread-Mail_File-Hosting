@@ -1,4 +1,5 @@
 {
+  "0.6.2": "Removes the \"Update test\" label. Install update now also works when the extension folder was in Downloads.",
   "0.6.1": "Test release: shows a small \"Update test\" label next to the title.",
   "0.6.0": "Update banner: new versions are announced at the top of the app and install with one click."
 }
