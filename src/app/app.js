@@ -743,8 +743,12 @@ async function openMessage(id, messageId) {
     if (seq !== openSeq) return;
     state.message = msg;
     renderReader();
-    // An encrypted (Proton) body is not shown here, so opening it does not
-    // count as reading it.
+    // Proton marks an email read when its tab opens it; put it back to unread
+    // unless the user wants emails marked read on open.
+    if (msg.openedInProton && !msg.isRead && !state.settings.markReadOnOpen) {
+      provider.setRead(a, messageId, false).catch((e) => console.warn('restore unread failed', e));
+    }
+    // An encrypted body that could not be shown does not count as read.
     if (state.settings.markReadOnOpen && !msg.isRead && !msg.encrypted) {
       setRead(id, messageId, true).catch((e) => toast(`Couldn't mark as read: ${e.message}`, { error: true }));
     }
@@ -802,11 +806,12 @@ function renderReader() {
     ${remoteImages && !allowRemote ? `<div class="banner"><span>Remote images are blocked so the sender can't tell you opened this email.</span>
       <button class="link-btn" data-action="show-images">Show images</button>
       <button class="link-btn" data-action="always-images">Always show</button></div>` : ''}
+    ${msg.externalAttachments?.length ? `<div class="attachments">${msg.externalAttachments.map((name) => `<button class="attachment" data-action="open-web" title="Download in Proton">${icon.clip}<span class="name">${esc(name)}</span><span class="size">in Proton</span></button>`).join('')}</div>` : ''}
     ${files.length ? `<div class="attachments">${files.map((f) => `<button class="attachment" data-action="download" data-index="${msg.attachments.indexOf(f)}" title="${esc(f.filename)}">${icon.clip}<span class="name">${esc(f.filename)}</span><span class="size">${formatSize(f.size)}</span></button>`).join('')}</div>` : ''}
     ${msg.encrypted
       ? `<div class="encrypted-note">${icon.lock}
           <p><strong>This email is end-to-end encrypted by Proton.</strong><br>
-          Its content can only be decrypted in Proton Mail${msg.numAttachments ? ` (${msg.numAttachments} attachment${msg.numAttachments > 1 ? 's' : ''})` : ''}.</p>
+          Its content could not be read from Proton Mail${msg.readError ? ` (${esc(msg.readError)})` : ''}.</p>
           <button class="tool-btn primary" data-action="open-web">${icon.external}Open in Proton</button></div>`
       : '<iframe class="body-frame" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Email body"></iframe>'}`;
   if (!msg.encrypted) reader.querySelector('iframe').srcdoc = srcdoc;

@@ -32,5 +32,16 @@
   },
   "action": {
     "default_title": "Unread Mail"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.proton.me/*"
+      ],
+      "js": [
+        "src/content/proton-reader.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

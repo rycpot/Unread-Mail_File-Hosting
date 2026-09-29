@@ -151,9 +151,17 @@ signed in to in this Chrome profile.
 2. In the app: **+ → Proton**. Every Proton account signed in there is added.
 
 What works: unread count and list, mark read/unread (one, several or all), delete
-(moves to Trash) and Recently read. Email **bodies are end-to-end encrypted**, so
-opening one shows its sender, recipients and date with an **Open in Proton**
-button; it is not marked read just by opening it here.
+(moves to Trash) and Recently read.
+
+**Reading emails:** Proton encrypts bodies end-to-end, and only Proton's own page
+can decrypt them. When you open a Proton email, the extension opens it in a
+**background Proton Mail tab** (not focused), copies the body Proton displays and
+shows it in the reader. The tab is reused for the next email and closes itself
+after 3 minutes without use. Attachments are listed and download in Proton. If
+reading fails, the reader offers **Open in Proton**.
+
+Proton marks an email read when its tab opens it; if *Mark as read when opened* is
+off in Settings, the extension sets it back to unread.
 
 If you sign out of Proton, the account shows *Signed out*; sign in at
 mail.proton.me again and click **Sign in** in the app.

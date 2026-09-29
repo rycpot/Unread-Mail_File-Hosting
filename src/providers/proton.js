@@ -9,11 +9,14 @@
 //   * x-pm-appversion must name a current web-mail release; it is read from
 //     mail.proton.me/assets/version.json (and refreshed when Proton rejects it).
 //
-// Message metadata (sender, subject, time, read state, labels) is readable;
-// bodies are end-to-end encrypted, so the reader offers "Open in Proton".
+// Message metadata (sender, subject, time, read state, labels) is readable
+// directly. Bodies are end-to-end encrypted: they are read from a Proton Mail
+// tab after Proton has decrypted them (see proton-tab.js), so no keys are ever
+// handled here. If that fails, the reader falls back to "Open in Proton".
 
 import { AuthRequiredError } from '../auth.js';
 import { ApiError } from '../http.js';
+import { readInProtonTab } from './proton-tab.js';
 
 const ORIGIN = 'https://mail.proton.me';
 const API = `${ORIGIN}/api`;
@@ -216,7 +219,7 @@ export const proton = {
 
   async getMessage(account, id) {
     const { Message: m } = await call(account, `mail/v4/messages/${encodeURIComponent(id)}`);
-    return {
+    const base = {
       id: m.ID,
       subject: m.Subject ?? '',
       from: addr(m.Sender),
@@ -224,14 +227,19 @@ export const proton = {
       cc: (m.CCList ?? []).map(addr),
       date: (m.Time ?? 0) * 1000,
       isRead: !m.Unread,
-      // The body is PGP-encrypted to the user's keys; it is not decrypted here.
-      encrypted: true,
-      html: null,
-      text: null,
       attachments: [],
       numAttachments: m.NumAttachments ?? 0,
       webUrl: `${ORIGIN}/u/0/inbox/${encodeURIComponent(m.ID)}`,
     };
+    try {
+      const shown = await readInProtonTab(m.ID);
+      // Proton marks an email read when it opens it; the app restores the
+      // unread state if "Mark as read when opened" is off.
+      return { ...base, html: shown.html, text: null, openedInProton: true, externalAttachments: shown.attachments ?? [] };
+    } catch (e) {
+      console.warn('[proton] reading from the Proton tab failed:', e);
+      return { ...base, encrypted: true, html: null, text: null, readError: e.message };
+    }
   },
 
   async setRead(account, id, read) {
