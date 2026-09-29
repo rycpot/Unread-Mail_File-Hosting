@@ -256,8 +256,10 @@ function renderChips() {
       ${pico(a.provider)}<span class="chip-name">${esc(a.email.split('@')[0])}</span>${n ? `<span class="chip-n">${n}</span>` : ''}${hasProblem(a) ? '<span class="chip-warn"></span>' : ''}</button>`;
   };
   const allLabel = p ? `All ${esc(p.name)}` : 'All accounts';
+  // "All <provider>" only makes sense with more than one account to combine.
+  const showAll = !p || liveAccounts().filter((a) => a.provider === provider).length > 1;
   return `<div class="chips">
-    <button class="chip${account ? '' : ' on'}" data-action="view" data-provider="${provider ?? ''}">${allLabel}</button>
+    ${showAll ? `<button class="chip${account ? '' : ' on'}" data-action="view" data-provider="${provider ?? ''}">${allLabel}</button>` : ''}
     ${pool.map(chip).join('')}
     ${p ? `<button class="chip add" data-action="add" data-provider="${p.id}">${icon.plus}Add</button>` : ''}
   </div>`;
@@ -288,6 +290,11 @@ function renderNotices(accounts) {
 function renderSidebar() {
   // An account view whose account is gone (or not loaded yet) falls back to its provider.
   if (state.view.account && !state.accounts[state.view.account]) state.view = { ...state.view, account: null };
+  // A provider with a single account opens that account directly.
+  if (state.view.provider && !state.view.account) {
+    const only = liveAccounts().filter((a) => a.provider === state.view.provider);
+    if (only.length === 1) state.view = { ...state.view, account: only[0].id };
+  }
   const { provider, account } = state.view;
   const accounts = viewAccounts();
   const messages = viewMessages();
