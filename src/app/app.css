@@ -557,6 +557,8 @@ button { font: inherit; color: inherit; }
 }
 .dialog::backdrop { background: rgba(15, 23, 42, 0.4); }
 .dialog h2 { margin: 0 0 8px; font-size: 17px; }
+/* The heading takes focus only so no choice starts pre-selected; no ring. */
+.dialog h2:focus { outline: none; }
 .dialog form { display: grid; gap: 12px; }
 .dialog label { display: grid; gap: 4px; font-size: 13px; font-weight: 500; }
 .dialog input {
