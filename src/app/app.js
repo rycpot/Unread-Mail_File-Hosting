@@ -229,7 +229,7 @@ function renderRail() {
   const total = visible.reduce((s, a) => s + unreadOf(a), 0);
   const badge = (n) => (n ? `<span class="rail-badge">${n > 999 ? '999+' : n}</span>` : '');
   const active = (p) => (state.view.provider === p && !state.view.account) || (p && state.view.provider === p) ? ' active' : '';
-  let html = `<button class="rail-btn all${!state.view.provider && !state.view.account ? ' active' : ''}" data-action="view" data-provider="" title="All accounts · ${total} unread"><span class="rail-all">All</span>${badge(total)}</button>`;
+  let html = `<button class="rail-btn all${!state.view.provider && !state.view.account ? ' active' : ''}" data-action="view" data-provider="" title="All accounts · ${total} unread">${pico('all', 'rail-icon all-icon')}${badge(total)}</button>`;
   for (const p of Object.values(providers)) {
     const accounts = visible.filter((a) => a.provider === p.id);
     const n = accounts.reduce((s, a) => s + unreadOf(a), 0);
@@ -594,6 +594,23 @@ async function refreshAllFromUi() {
   try {
     const res = await chrome.runtime.sendMessage({ cmd: 'refresh' });
     if (res && !res.ok) toast(res.error, { error: true });
+    await load();
+    renderSidebar();
+    renderTopbar();
+    // A manual refresh also closes an email that is no longer in the list
+    // (read or deleted elsewhere); automatic checks never do.
+    const sel = state.selected;
+    const recent = sel && state.recent.get(sel.accountId);
+    const listed = sel && (state.visibleList.some((m) => m.accountId === sel.accountId && m.id === sel.messageId)
+      || (state.view.account === sel.accountId && state.recentOpen.has(sel.accountId)
+        && recent?.messages?.some((m) => m.id === sel.messageId)));
+    if (sel && !listed) {
+      openSeq++; // drop any load still in flight for it
+      state.selected = null;
+      state.message = null;
+      renderReaderEmpty();
+      renderSidebar();
+    }
     for (const id of state.recentOpen) loadRecent(id);
   } finally {
     btn.classList.remove('spinning');
