@@ -613,12 +613,22 @@ async function connectSession(provider, email) {
     toast(e.message, { error: true });
     return;
   }
-  const wanted = email ? found.filter((f) => f.email === email.toLowerCase()) : found;
+  const known = (f) => Boolean(state.accounts[accountId(provider.id, f.email)]);
+  // "Add" is about accounts not connected yet; "Sign in" reconnects one.
+  const wanted = email ? found.filter((f) => f.email === email.toLowerCase()) : found.filter((f) => !known(f));
+  // Keep already-connected accounts pointed at their current session.
+  for (const f of found.filter(known)) {
+    const id = accountId(provider.id, f.email);
+    if (state.accounts[id].uid !== f.uid) await upsertAccount({ ...state.accounts[id], uid: f.uid });
+  }
   if (!wanted.length) {
-    $('sessionTitle').textContent = `Sign in to ${provider.name}`;
+    const onlyKnown = !email && found.length > 0;
+    $('sessionTitle').textContent = onlyKnown ? `Add another ${provider.name} account` : `Sign in to ${provider.name}`;
     $('sessionText').textContent = email
       ? `${email} is not signed in to ${provider.name} in this Chrome profile. Sign in at mail.proton.me (keep "Keep me signed in" on), then come back and click "I've signed in".`
-      : `No ${provider.name} account is signed in in this Chrome profile. Sign in at mail.proton.me (keep "Keep me signed in" on), then come back and click "I've signed in".`;
+      : onlyKnown
+        ? `No new ${provider.name} account found: ${found.map((f) => f.email).join(', ')} ${found.length > 1 ? 'are' : 'is'} already connected. To add another, open mail.proton.me, choose your account name → Add account and sign in, then come back and click "I've signed in".`
+        : `No ${provider.name} account is signed in in this Chrome profile. Sign in at mail.proton.me (keep "Keep me signed in" on), then come back and click "I've signed in".`;
     if (!$('sessionDialog').open) $('sessionDialog').showModal();
     return;
   }
