@@ -232,7 +232,7 @@ export const proton = {
       webUrl: `${ORIGIN}/u/0/inbox/${encodeURIComponent(m.ID)}`,
     };
     try {
-      const shown = await readInProtonTab(m.ID);
+      const shown = await readInProtonTab(m.ID, m.ConversationID);
       // Proton marks an email read when it opens it; the app restores the
       // unread state if "Mark as read when opened" is off.
       return { ...base, html: shown.html, text: null, openedInProton: true, externalAttachments: shown.attachments ?? [] };

@@ -21,18 +21,25 @@ async function liveTab() {
   }
 }
 
-// Resolves once the content script in the tab answers.
-async function waitForScript(id) {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
+const TOTAL_TIMEOUT_MS = 45000;
+let lastPath = '';
+
+// Resolves once the content script reports that Proton's mail app is loaded.
+async function waitForScript(id, deadline) {
   while (Date.now() < deadline) {
     try {
       const res = await chrome.tabs.sendMessage(id, { cmd: 'protonPing' });
+      lastPath = res?.path ?? lastPath;
       if (res?.ok) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error('Proton Mail did not load. Check that you are signed in at mail.proton.me.');
+  throw new Error(`Proton Mail did not load (tab is at ${lastPath || 'an unknown page'}). Check that you are signed in at mail.proton.me.`);
 }
+
+// The page reloading or redirecting while a request is pending closes the
+// message channel; that is retried rather than reported.
+const PAGE_CHANGED = /message channel closed|Receiving end does not exist|back\/forward cache|message port closed/i;
 
 function scheduleClose() {
   clearTimeout(closeTimer);
@@ -46,7 +53,7 @@ addEventListener('pagehide', () => {
   if (tabId != null) chrome.tabs.remove(tabId).catch(() => {});
 });
 
-export async function readInProtonTab(messageId, localId = 0) {
+export async function readInProtonTab(messageId, conversationId, localId = 0) {
   const url = `https://mail.proton.me/u/${localId}/inbox/${encodeURIComponent(messageId)}`;
   let id = await liveTab();
   if (id == null) {
@@ -57,16 +64,25 @@ export async function readInProtonTab(messageId, localId = 0) {
     lastId = null;
   }
   clearTimeout(closeTimer);
+  const deadline = Date.now() + TOTAL_TIMEOUT_MS;
   try {
-    await waitForScript(id);
-    // "before" lets the script skip the previous email's body while Proton is
-    // still switching; it does not apply when the same email is read again.
-    const before = lastId === messageId ? '' : lastMarker;
-    const res = await chrome.tabs.sendMessage(id, { cmd: 'protonRead', id: messageId, before });
-    if (!res?.ok) throw new Error(res?.error ?? 'Could not read the email from Proton');
-    lastMarker = res.marker;
-    lastId = messageId;
-    return res;
+    for (;;) {
+      await waitForScript(id, deadline);
+      // "before" lets the script skip the previous email's body while Proton is
+      // still switching; it does not apply when the same email is read again.
+      const before = lastId === messageId ? '' : lastMarker;
+      let res;
+      try {
+        res = await chrome.tabs.sendMessage(id, { cmd: 'protonRead', id: messageId, conversationId, before });
+      } catch (e) {
+        if (PAGE_CHANGED.test(e.message) && Date.now() < deadline) continue;
+        throw e;
+      }
+      if (!res?.ok) throw new Error(res?.error ?? 'Could not read the email from Proton');
+      lastMarker = res.marker;
+      lastId = messageId;
+      return res;
+    }
   } finally {
     scheduleClose();
   }

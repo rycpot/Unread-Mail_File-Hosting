@@ -32,9 +32,13 @@
     return inline ? { documentElement: inline, body: inline, inline: true } : null;
   }
 
+  // The email is open when the address names it or its conversation (Proton
+  // groups emails into conversations by default).
+  const isOpen = (ids) => ids.some((x) => x && location.href.includes(x));
+
   // Navigates Proton's single-page app to the email if it is not open yet.
-  function openEmail(id) {
-    if (location.pathname.includes(id)) return;
+  function openEmail(id, ids) {
+    if (isOpen(ids)) return;
     const path = location.pathname.match(/^\/u\/\d+/)?.[0] ?? '/u/0';
     history.pushState({}, '', `${path}/inbox/${id}`);
     dispatchEvent(new PopStateEvent('popstate', { state: {} }));
@@ -59,14 +63,15 @@
     }
   }
 
-  async function read(id, before) {
-    openEmail(id);
+  async function read(id, conversationId, before) {
+    const ids = [id, conversationId];
+    openEmail(id, ids);
     const deadline = Date.now() + WAIT_MS;
     let last = '';
     let stableSince = 0;
     while (Date.now() < deadline) {
       await sleep(250);
-      if (!location.pathname.includes(id)) continue;
+      if (!isOpen(ids)) continue;
       const doc = findBodyDocument();
       const html = doc?.body?.innerHTML ?? '';
       // Wait until Proton has finished rendering, and not the previous email.
@@ -89,11 +94,13 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.cmd === 'protonPing') {
-      sendResponse({ ok: true, path: location.pathname });
+      // Ready once the mail app (not a sign-in or loading page) has loaded.
+      const ready = document.readyState === 'complete' && /^\/u\/\d+\//.test(location.pathname);
+      sendResponse({ ok: ready, path: location.pathname });
       return;
     }
     if (msg?.cmd !== 'protonRead') return;
-    read(msg.id, msg.before).then(
+    read(msg.id, msg.conversationId, msg.before).then(
       (res) => sendResponse({ ok: true, ...res }),
       (e) => sendResponse({ ok: false, error: e.message }),
     );
