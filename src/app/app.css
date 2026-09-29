@@ -559,6 +559,17 @@ button { font: inherit; color: inherit; }
 .recent-toggle:hover { color: var(--text-2); background: var(--surface-2); }
 .recent-toggle .chevron { width: 13px; height: 13px; transform: rotate(-90deg); }
 .recent-toggle[aria-expanded="true"] .chevron { transform: none; }
+.spam-count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
 .recent-note { padding: 2px 16px 4px 42px; color: var(--text-3); font-size: 12px; }
 .recent-note.error { color: var(--danger); }
 
@@ -609,3 +620,11 @@ button { font: inherit; color: inherit; }
 }
 .choice:hover { border-color: var(--accent); background: var(--accent-soft); }
 .choice span { color: var(--text-2); font-size: 12px; line-height: 1.4; }
+
+/* ---------- bulk delete confirmation ---------- */
+
+.tool-btn.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.tool-btn.danger-solid:hover { filter: brightness(0.95); background: var(--danger); }
+.delete-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.delete-list li { display: flex; align-items: center; gap: 8px; }
+.delete-list .pico { width: 16px; height: 16px; }

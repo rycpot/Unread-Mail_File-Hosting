@@ -37,7 +37,7 @@ import time
 import urllib.request
 import zipfile
 
-VERSION = 3
+VERSION = 4
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -233,10 +233,22 @@ def check(typ, data, what):
 
 
 def select_inbox(conn, readonly):
-    typ, data = conn.select('INBOX', readonly=readonly)
-    check(typ, data, 'Opening INBOX')
+    return select_folder(conn, 'INBOX', readonly)
+
+
+def select_folder(conn, name, readonly):
+    typ, data = conn.select(name if name == 'INBOX' else quote_mailbox(name), readonly=readonly)
+    check(typ, data, 'Opening {}'.format(name))
     typ, data = conn.response('UIDVALIDITY')
     return _text(data[0]) if data and data[0] else '0'
+
+
+def open_folder(conn, req, readonly):
+    """Selects the folder a request is about: the inbox, or with
+    folder "spam" the spam folder. Returns its UIDVALIDITY."""
+    if req.get('folder') == 'spam':
+        return select_folder(conn, find_junk(conn), readonly)
+    return select_inbox(conn, readonly)
 
 
 def unseen_uids(conn):
@@ -286,12 +298,15 @@ def fetch_headers(conn, uids, uidvalidity):
     if not uids:
         return messages
     typ, data = conn.uid('FETCH', ','.join(str(u) for u in uids),
-                         '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
+                         '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
     check(typ, data, 'Fetching headers')
-    for item in data:
+    for n, item in enumerate(data):
         if not isinstance(item, tuple):
             continue
         meta, raw = _text(item[0]), item[1]
+        # Some servers send FLAGS after the header literal, in the next element.
+        after = data[n + 1] if n + 1 < len(data) and not isinstance(data[n + 1], tuple) else b''
+        flags = re.search(r'FLAGS \(([^)]*)\)', meta + ' ' + _text(after or b''))
         uid = re.search(r'UID (\d+)', meta)
         if not uid:
             continue
@@ -307,6 +322,7 @@ def fetch_headers(conn, uids, uidvalidity):
             'from': address(decode_header(hdr.get('From'))),
             'subject': decode_header(hdr.get('Subject')),
             'date': date_ms(hdr.get('Date'), fallback) or fallback or 0,
+            'read': bool(flags and '\\seen' in flags.group(1).lower()),
         })
     messages.sort(key=lambda m: m['date'], reverse=True)
     return messages
@@ -319,7 +335,8 @@ def cmd_summary(req):
         uidvalidity = select_inbox(conn, readonly=True)
         uids = unseen_uids(conn)
         # Highest UIDs are the most recently delivered.
-        return {'unreadCount': len(uids), 'messages': fetch_headers(conn, sorted(uids)[-limit:], uidvalidity)}
+        messages = fetch_headers(conn, sorted(uids)[-limit:], uidvalidity)
+        return {'unreadCount': len(uids), 'messages': messages, 'spamUnread': spam_unread(conn)}
     finally:
         _logout(conn)
 
@@ -352,7 +369,7 @@ def leaf_parts(msg):
 def cmd_get_message(req):
     conn = connect(req['provider'], req['email'])
     try:
-        uidvalidity = select_inbox(conn, readonly=True)
+        uidvalidity = open_folder(conn, req, readonly=True)
         (uid,) = parse_ids([req['id']], uidvalidity)
         meta, raw = fetch_raw(conn, uid)
     finally:
@@ -416,7 +433,7 @@ def _addr_list(values):
 def cmd_get_attachment(req):
     conn = connect(req['provider'], req['email'])
     try:
-        uidvalidity = select_inbox(conn, readonly=True)
+        uidvalidity = open_folder(conn, req, readonly=True)
         (uid,) = parse_ids([req['id']], uidvalidity)
         _, raw = fetch_raw(conn, uid)
     finally:
@@ -442,7 +459,7 @@ def store_seen(conn, uids, seen, total=None, offset=0):
 def cmd_set_read(req):
     conn = connect(req['provider'], req['email'])
     try:
-        uidvalidity = select_inbox(conn, readonly=False)
+        uidvalidity = open_folder(conn, req, readonly=False)
         uids = parse_ids(req['ids'], uidvalidity)
         store_seen(conn, uids, bool(req.get('read', True)))
         return {'failed': []}
@@ -463,9 +480,12 @@ def cmd_mark_all_read(req):
 
 
 TRASH_NAMES = ('Deleted Messages', 'Trash', 'Deleted Items', 'Deleted')
+# Yahoo and AOL call it "Bulk" / "Bulk Mail"; iCloud "Junk".
+JUNK_NAMES = ('Junk', 'Spam', 'Bulk', 'Bulk Mail', 'Junk E-mail', 'Junk Email')
 
 
-def find_trash(conn):
+def find_special(conn, flag, wanted_names, what):
+    """The folder with the special-use flag (RFC 6154), else a well-known name."""
     typ, data = conn.list()
     check(typ, data, 'Listing folders')
     names = []
@@ -477,44 +497,92 @@ def find_trash(conn):
         name = m.group('name').strip()
         if name.startswith('"') and name.endswith('"'):
             name = name[1:-1].replace('\\"', '"').replace('\\\\', '\\')
-        if '\\trash' in m.group('flags').lower():
+        if flag in m.group('flags').lower():
             return name
         names.append(name)
-    for wanted in TRASH_NAMES:
+    for wanted in wanted_names:
         for name in names:
             if name.lower() == wanted.lower():
                 return name
-    raise HelperError('imap', 'Could not find the Trash folder')
+    raise HelperError('imap', 'Could not find the {} folder'.format(what))
+
+
+def find_trash(conn):
+    return find_special(conn, '\\trash', TRASH_NAMES, 'Trash')
+
+
+def find_junk(conn):
+    return find_special(conn, '\\junk', JUNK_NAMES, 'Spam')
 
 
 def quote_mailbox(name):
     return '"' + name.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+def move_uids(conn, uids, dest, what):
+    """Moves messages of the selected folder to dest (MOVE, else COPY + delete)."""
+    uids = ','.join(uids)
+    # Servers advertise MOVE/UIDPLUS only after login, so ask again.
+    typ, data = conn.capability()
+    caps = set(_text(data[0]).upper().split()) if typ == 'OK' and data else set()
+    target = dest if dest == 'INBOX' else quote_mailbox(dest)
+    if 'MOVE' in caps:
+        typ, data = conn.uid('MOVE', uids, target)
+        check(typ, data, 'Moving to {}'.format(what))
+    else:
+        typ, data = conn.uid('COPY', uids, target)
+        check(typ, data, 'Copying to {}'.format(what))
+        typ, data = conn.uid('STORE', uids, '+FLAGS.SILENT', '(\\Deleted)')
+        check(typ, data, 'Removing the original')
+        # UID EXPUNGE only removes these messages, never others that happen
+        # to be flagged \Deleted.
+        if 'UIDPLUS' in caps:
+            conn.uid('EXPUNGE', uids)
+
+
 def cmd_trash(req):
     conn = connect(req['provider'], req['email'])
     try:
         trash = find_trash(conn)
-        uidvalidity = select_inbox(conn, readonly=False)
-        uids = ','.join(parse_ids(req['ids'], uidvalidity))
-        # Servers advertise MOVE/UIDPLUS only after login, so ask again.
-        typ, data = conn.capability()
-        caps = set(_text(data[0]).upper().split()) if typ == 'OK' and data else set()
-        if 'MOVE' in caps:
-            typ, data = conn.uid('MOVE', uids, quote_mailbox(trash))
-            check(typ, data, 'Moving to Trash')
-        else:
-            typ, data = conn.uid('COPY', uids, quote_mailbox(trash))
-            check(typ, data, 'Copying to Trash')
-            typ, data = conn.uid('STORE', uids, '+FLAGS.SILENT', '(\\Deleted)')
-            check(typ, data, 'Removing from Inbox')
-            # UID EXPUNGE only removes these messages, never others that happen
-            # to be flagged \Deleted.
-            if 'UIDPLUS' in caps:
-                conn.uid('EXPUNGE', uids)
-        return {'trash': trash}
+        uidvalidity = open_folder(conn, req, readonly=False)
+        move_uids(conn, parse_ids(req['ids'], uidvalidity), trash, 'Trash')
+        return {'trash': trash, 'failed': []}
     finally:
         _logout(conn)
+
+
+def cmd_spam_list(req):
+    """The newest emails in the spam folder, read or not."""
+    limit = int(req.get('limit', 20))
+    conn = connect(req['provider'], req['email'])
+    try:
+        uidvalidity = select_folder(conn, find_junk(conn), readonly=True)
+        uids = search(conn, 'ALL')
+        return {'messages': fetch_headers(conn, sorted(uids)[-limit:], uidvalidity)}
+    finally:
+        _logout(conn)
+
+
+def cmd_not_spam(req):
+    """Moves emails from the spam folder back to the inbox."""
+    conn = connect(req['provider'], req['email'])
+    try:
+        uidvalidity = select_folder(conn, find_junk(conn), readonly=False)
+        move_uids(conn, parse_ids(req['ids'], uidvalidity), 'INBOX', 'Inbox')
+        return {'failed': []}
+    finally:
+        _logout(conn)
+
+
+def spam_unread(conn):
+    """Unread count of the spam folder, or None if there is none."""
+    try:
+        junk = find_junk(conn)
+    except HelperError:
+        return None
+    typ, data = conn.status(quote_mailbox(junk), '(UNSEEN)')
+    m = re.search(r'UNSEEN (\d+)', _text(data[0] or b'')) if typ == 'OK' and data else None
+    return int(m.group(1)) if m else None
 
 
 def cmd_save_account(req):
@@ -786,6 +854,8 @@ COMMANDS = {
     'setRead': cmd_set_read,
     'markAllRead': cmd_mark_all_read,
     'trash': cmd_trash,
+    'spamList': cmd_spam_list,
+    'notSpam': cmd_not_spam,
     'selfUpdate': cmd_self_update,
 }
 

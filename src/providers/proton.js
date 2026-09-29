@@ -21,6 +21,7 @@ const ORIGIN = 'https://mail.proton.me';
 const API = `${ORIGIN}/api`;
 const INBOX = '0';
 const TRASH = '3';
+const SPAM = '4';
 const RULE_ID = 1001;
 const VERSION_KEY = 'protonAppVersion';
 // Used only if version.json cannot be read and nothing is cached yet.
@@ -208,9 +209,16 @@ function toSummary(m) {
 }
 
 async function listInbox(account, unread, pageSize, page = 0) {
-  const q = new URLSearchParams({ LabelID: INBOX, Unread: unread ? '1' : '0', Page: String(page), PageSize: String(pageSize), Sort: 'Time', Desc: '1' });
+  return listLabel(account, INBOX, { Unread: unread ? '1' : '0', Page: String(page), PageSize: String(pageSize) });
+}
+
+async function listLabel(account, label, params) {
+  const q = new URLSearchParams({ LabelID: label, Sort: 'Time', Desc: '1', ...params });
   return call(account, `mail/v4/messages?${q}`);
 }
+
+const moveTo = (account, label, ids) =>
+  call(account, 'mail/v4/messages/label', { method: 'PUT', body: { LabelID: label, IDs: ids } });
 
 // ---------- provider ----------
 
@@ -239,15 +247,30 @@ export const proton = {
       call(account, 'mail/v4/messages/count'),
       listInbox(account, true, 30),
     ]);
-    const inbox = (counts.Counts ?? []).find((c) => c.LabelID === INBOX);
-    return { unreadCount: inbox?.Unread ?? list.Total ?? 0, messages: (list.Messages ?? []).map(toSummary) };
+    const count = (label) => (counts.Counts ?? []).find((c) => c.LabelID === label);
+    return {
+      unreadCount: count(INBOX)?.Unread ?? list.Total ?? 0,
+      spamUnread: count(SPAM)?.Unread ?? 0,
+      messages: (list.Messages ?? []).map(toSummary),
+    };
+  },
+
+  // The newest emails in Spam, read or not, fetched only when asked for.
+  async fetchSpam(account, limit) {
+    return ((await listLabel(account, SPAM, { PageSize: String(limit) })).Messages ?? []).map(toSummary);
+  },
+
+  // Back to the inbox, as the web app's "Not spam" does.
+  async notSpam(account, ids) {
+    for (let i = 0; i < ids.length; i += 100) await moveTo(account, INBOX, ids.slice(i, i + 100));
+    return [];
   },
 
   async fetchRecentRead(account, limit) {
     return ((await listInbox(account, false, limit)).Messages ?? []).map(toSummary);
   },
 
-  async getMessage(account, id) {
+  async getMessage(account, id, { folder } = {}) {
     const { Message: m } = await call(account, `mail/v4/messages/${encodeURIComponent(id)}`);
     const localID = (await chrome.storage.local.get('protonSessions')).protonSessions?.[account.uid]?.localID ?? 0;
     const base = {
@@ -259,7 +282,7 @@ export const proton = {
       date: (m.Time ?? 0) * 1000,
       isRead: !m.Unread,
       numAttachments: m.NumAttachments ?? 0,
-      webUrl: `${ORIGIN}/u/${localID}/inbox/${encodeURIComponent(m.ID)}`,
+      webUrl: `${ORIGIN}/u/${localID}/${folder === 'spam' ? 'spam' : 'inbox'}/${encodeURIComponent(m.ID)}`,
     };
     const decrypt = async () => {
       await matchSessionEntry(account);
@@ -322,6 +345,14 @@ export const proton = {
 
   // Moves to Trash (label 3), as the web app's Delete button does.
   async trash(account, id) {
-    await call(account, 'mail/v4/messages/label', { method: 'PUT', body: { LabelID: TRASH, IDs: [id] } });
+    await moveTo(account, TRASH, [id]);
+  },
+
+  async trashMany(account, ids, onProgress) {
+    for (let i = 0; i < ids.length; i += 100) {
+      await moveTo(account, TRASH, ids.slice(i, i + 100));
+      onProgress?.(Math.min(i + 100, ids.length), ids.length);
+    }
+    return [];
   },
 };

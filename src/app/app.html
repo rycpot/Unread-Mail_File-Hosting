@@ -138,6 +138,17 @@
     </form>
   </dialog>
 
+  <dialog class="dialog" id="deleteDialog" aria-labelledby="deleteTitle">
+    <form method="dialog">
+      <h2 id="deleteTitle">Move emails to Trash?</h2>
+      <div id="deleteDetails"></div>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="tool-btn" id="deleteCancel">Cancel</button>
+        <button type="submit" value="delete" class="tool-btn danger-solid" id="deleteConfirm">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

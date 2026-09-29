@@ -21,9 +21,11 @@ async function doRefresh(account) {
   try {
     // The previous list lets providers skip re-fetching emails they already have.
     const prev = await getMail(account.id);
-    const { unreadCount, messages } = await providers[account.provider].fetchSummary(account, prev);
+    const { unreadCount, messages, spamUnread = null } = await providers[account.provider].fetchSummary(account, prev);
     const { fresh, mark } = newArrivals(account, prev, messages);
-    await patchMail(account.id, { status: 'ok', error: null, unreadCount, messages, mark, lastCheckedAt: now, lastSuccessAt: now });
+    await patchMail(account.id, {
+      status: 'ok', error: null, unreadCount, messages, spamUnread, mark, lastCheckedAt: now, lastSuccessAt: now,
+    });
     if (fresh.length) {
       reportNewMail(fresh.map((m) => ({ accountId: account.id, provider: account.provider, id: m.id, from: m.from, subject: m.subject })));
     }

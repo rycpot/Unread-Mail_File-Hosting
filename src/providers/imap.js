@@ -34,19 +34,21 @@ function imapProvider({ id, name, webUrl, passwordHelp }) {
       return (await call(account, 'recentRead', { limit })).messages;
     },
 
-    async getMessage(account, messageId) {
-      const m = await call(account, 'getMessage', { id: messageId });
+    // opts.folder is "spam" for emails opened from the Spam list; message ids
+    // are only unique within a folder.
+    async getMessage(account, messageId, { folder } = {}) {
+      const m = await call(account, 'getMessage', { id: messageId, folder });
       return { ...m, webUrl };
     },
 
-    async getAttachment(account, messageId, attachment) {
+    async getAttachment(account, messageId, attachment, { folder } = {}) {
       if (attachment.data) return base64ToBytes(attachment.data);
-      const res = await call(account, 'getAttachment', { id: messageId, attachmentId: attachment.id });
+      const res = await call(account, 'getAttachment', { id: messageId, attachmentId: attachment.id, folder });
       return base64ToBytes(res.data);
     },
 
-    async setRead(account, messageId, read) {
-      await call(account, 'setRead', { ids: [messageId], read });
+    async setRead(account, messageId, read, { folder } = {}) {
+      await call(account, 'setRead', { ids: [messageId], read, folder });
     },
 
     async setReadMany(account, ids, read) {
@@ -57,8 +59,20 @@ function imapProvider({ id, name, webUrl, passwordHelp }) {
       return call(account, 'markAllRead', {}, { onProgress });
     },
 
-    async trash(account, messageId) {
-      await call(account, 'trash', { ids: [messageId] });
+    async trash(account, messageId, { folder } = {}) {
+      await call(account, 'trash', { ids: [messageId], folder });
+    },
+
+    async trashMany(account, ids) {
+      return (await call(account, 'trash', { ids })).failed ?? [];
+    },
+
+    async fetchSpam(account, limit) {
+      return (await call(account, 'spamList', { limit })).messages;
+    },
+
+    async notSpam(account, ids) {
+      return (await call(account, 'notSpam', { ids })).failed ?? [];
     },
   };
 }

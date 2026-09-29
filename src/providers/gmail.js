@@ -18,12 +18,13 @@ export const gmail = {
   },
 
   async fetchSummary(account, prev) {
-    const [label, list] = await Promise.all([
+    const [label, list, spam] = await Promise.all([
       apiFetch(account, `${API}/labels/INBOX`),
       apiFetch(account, `${API}/messages?labelIds=INBOX&labelIds=UNREAD&maxResults=${MAX_MESSAGES_PER_ACCOUNT}`),
+      apiFetch(account, `${API}/labels/SPAM`).catch(() => null),
     ]);
     // Headers of emails already listed last time are reused, so a check with
-    // no new mail costs two requests.
+    // no new mail costs three requests (with the spam count).
     const known = new Map((prev?.messages ?? []).map((m) => [m.id, m]));
     const refs = list.messages ?? [];
     const fresh = await headers(account, refs.filter((r) => !known.has(r.id)));
@@ -31,7 +32,22 @@ export const gmail = {
     const messages = refs
       .map((r) => byId.get(r.id) ?? { ...known.get(r.id), read: false })
       .sort((a, b) => b.date - a.date);
-    return { unreadCount: label.messagesUnread ?? 0, messages };
+    return { unreadCount: label.messagesUnread ?? 0, spamUnread: spam?.messagesUnread ?? 0, messages };
+  },
+
+  // The newest emails in Spam, read or not, fetched only when asked for.
+  async fetchSpam(account, limit) {
+    const list = await apiFetch(account, `${API}/messages?labelIds=SPAM&maxResults=${limit}`);
+    return headers(account, list.messages ?? []);
+  },
+
+  // Back to the inbox; Gmail also learns it was not spam.
+  async notSpam(account, ids) {
+    await apiFetch(account, `${API}/messages/batchModify`, {
+      method: 'POST',
+      body: { ids, addLabelIds: ['INBOX'], removeLabelIds: ['SPAM'] },
+    });
+    return [];
   },
 
   // The newest already-read inbox emails, fetched only when asked for.
@@ -107,6 +123,22 @@ export const gmail = {
   async trash(account, id) {
     await apiFetch(account, `${API}/messages/${id}/trash`, { method: 'POST' });
   },
+
+  // Several at once; returns the ids that could not be moved.
+  async trashMany(account, ids, onProgress) {
+    const failed = [];
+    let done = 0;
+    await mapLimit(ids, 5, async (id) => {
+      try {
+        await this.trash(account, id);
+      } catch (e) {
+        if (e.name === 'AuthRequiredError') throw e;
+        failed.push(id);
+      }
+      onProgress?.(++done, ids.length);
+    });
+    return failed;
+  },
 };
 
 function headerMap(headers = []) {
@@ -162,6 +194,7 @@ async function headers(account, refs) {
       subject: h.subject ?? '',
       snippet: decodeEntities(m.snippet),
       date: Number(m.internalDate),
+      read: !(m.labelIds ?? []).includes('UNREAD'),
     };
   });
   return messages.sort((a, b) => b.date - a.date);

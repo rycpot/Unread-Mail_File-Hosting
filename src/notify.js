@@ -114,21 +114,36 @@ async function show(items, { update = false, persistent = false } = {}) {
   return { title: options.title, message: options.message, icons: single ? [single.provider] : providerIds, updated: Boolean(updated) };
 }
 
-// The providers' icons side by side (or in a grid), as one image.
+// The providers' icons as one square image, each as large as the square
+// allows: two overlap diagonally, three form a triangle, four or more a grid.
+// Each entry is [x, y, size] as a fraction of the square.
+const LAYOUTS = {
+  2: [[0, 0, 0.64], [0.36, 0.36, 0.64]],
+  3: [[0, 0, 0.49], [0.51, 0, 0.49], [0.255, 0.51, 0.49]],
+  4: [[0, 0, 0.49], [0.51, 0, 0.49], [0, 0.51, 0.49], [0.51, 0.51, 0.49]],
+  5: [[0, 0.17, 0.32], [0.34, 0.17, 0.32], [0.68, 0.17, 0.32], [0.17, 0.51, 0.32], [0.51, 0.51, 0.32]],
+  6: [[0, 0.17, 0.32], [0.34, 0.17, 0.32], [0.68, 0.17, 0.32], [0, 0.51, 0.32], [0.34, 0.51, 0.32], [0.68, 0.51, 0.32]],
+};
+
 export async function compositeIcon(ids) {
   const size = 256;
-  const cols = ids.length <= 2 ? ids.length : ids.length <= 4 ? 2 : 3;
-  const rows = Math.ceil(ids.length / cols);
-  const cell = Math.floor(size / Math.max(cols, rows));
-  const pad = Math.round(cell * 0.08);
+  ids = ids.slice(0, 6);
+  const layout = LAYOUTS[ids.length] ?? [[0, 0, 1]];
   const canvas = new OffscreenCanvas(size, size);
   const g = canvas.getContext('2d');
-  const offX = (size - cols * cell) / 2;
-  const offY = (size - rows * cell) / 2;
+  g.imageSmoothingQuality = 'high';
   for (const [i, id] of ids.entries()) {
     const blob = await (await fetch(chrome.runtime.getURL(`icons/providers/${id}.png`))).blob();
     const bmp = await createImageBitmap(blob);
-    g.drawImage(bmp, offX + (i % cols) * cell + pad, offY + Math.floor(i / cols) * cell + pad, cell - 2 * pad, cell - 2 * pad);
+    const [x, y, s] = layout[i].map((v) => v * size);
+    if (ids.length === 2 && i === 1) {
+      // Clear a thin outline around the front icon so the two stay distinct.
+      const ring = 10;
+      g.globalCompositeOperation = 'destination-out';
+      g.drawImage(bmp, x - ring, y - ring, s + 2 * ring, s + 2 * ring);
+      g.globalCompositeOperation = 'source-over';
+    }
+    g.drawImage(bmp, x, y, s, s);
   }
   const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer());
   let bin = '';

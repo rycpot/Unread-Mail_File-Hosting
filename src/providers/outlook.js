@@ -24,11 +24,27 @@ export const outlook = {
   },
 
   async fetchSummary(account) {
-    const [folder, messages] = await Promise.all([
+    const [folder, messages, junk] = await Promise.all([
       apiFetch(account, `${API}/mailFolders/inbox?$select=unreadItemCount`),
       listInbox(account, false, MAX_MESSAGES_PER_ACCOUNT),
+      apiFetch(account, `${API}/mailFolders/junkemail?$select=unreadItemCount`).catch(() => null),
     ]);
-    return { unreadCount: folder.unreadItemCount ?? messages.length, messages };
+    return { unreadCount: folder.unreadItemCount ?? messages.length, spamUnread: junk?.unreadItemCount ?? 0, messages };
+  },
+
+  // The newest emails in Junk Email, read or not, fetched only when asked for.
+  async fetchSpam(account, limit) {
+    const list = await apiFetch(
+      account,
+      `${API}/mailFolders/junkemail/messages?$orderby=receivedDateTime%20desc&$top=${limit}` +
+        '&$select=id,subject,from,receivedDateTime,bodyPreview,isRead',
+    );
+    return (list.value ?? []).map((m) => ({ ...toSummary(m), read: m.isRead }));
+  },
+
+  // Back to the inbox.
+  async notSpam(account, ids) {
+    return batch(account, ids, (id) => ({ method: 'POST', url: `/me/messages/${enc(id)}/move`, body: { destinationId: 'inbox' } }));
   },
 
   // The newest already-read inbox emails, fetched only when asked for.
@@ -93,42 +109,8 @@ export const outlook = {
     await apiFetch(account, `${API}/messages/${enc(id)}`, { method: 'PATCH', body: { isRead: read } });
   },
 
-  // Graph JSON batching, 20 requests per call. Requests throttled with 429
-  // are retried after the server's Retry-After. Returns the ids that failed.
   async setReadMany(account, ids, read, onProgress) {
-    const failed = [];
-    for (let i = 0; i < ids.length; i += 20) {
-      let pending = ids.slice(i, i + 20);
-      for (let attempt = 0; pending.length && attempt < 4; attempt++) {
-        const res = await apiFetch(account, 'https://graph.microsoft.com/v1.0/$batch', {
-          method: 'POST',
-          body: {
-            requests: pending.map((id, n) => ({
-              id: String(n),
-              method: 'PATCH',
-              url: `/me/messages/${enc(id)}`,
-              headers: { 'Content-Type': 'application/json' },
-              body: { isRead: read },
-            })),
-          },
-        });
-        const byId = new Map((res.responses ?? []).map((r) => [Number(r.id), r]));
-        const throttled = [];
-        let wait = 0;
-        pending.forEach((id, n) => {
-          const r = byId.get(n);
-          if (r && r.status >= 200 && r.status < 300) return;
-          if (r?.status === 429 && attempt < 3) {
-            throttled.push(id);
-            wait = Math.max(wait, Number(r.headers?.['Retry-After'] ?? 2));
-          } else failed.push(id);
-        });
-        pending = throttled;
-        if (pending.length) await new Promise((ok) => setTimeout(ok, Math.min(wait, 30) * 1000));
-      }
-      onProgress?.(Math.min(i + 20, ids.length), ids.length);
-    }
-    return failed;
+    return batch(account, ids, (id) => ({ method: 'PATCH', url: `/me/messages/${enc(id)}`, body: { isRead: read } }), onProgress);
   },
 
   // Every unread inbox message, not just the ones listed in the sidebar. Ids are
@@ -152,7 +134,56 @@ export const outlook = {
       body: { destinationId: 'deleteditems' },
     });
   },
+
+  async trashMany(account, ids, onProgress) {
+    return batch(account, ids, (id) => ({ method: 'POST', url: `/me/messages/${enc(id)}/move`, body: { destinationId: 'deleteditems' } }), onProgress);
+  },
 };
+
+// Graph JSON batching, 20 requests per call; request(id) gives method, url and
+// body. Requests throttled with 429 are retried after the server's Retry-After.
+// Returns the ids that failed.
+async function batch(account, ids, request, onProgress) {
+  const failed = [];
+  for (let i = 0; i < ids.length; i += 20) {
+    let pending = ids.slice(i, i + 20);
+    for (let attempt = 0; pending.length && attempt < 4; attempt++) {
+      const res = await apiFetch(account, 'https://graph.microsoft.com/v1.0/$batch', {
+        method: 'POST',
+        body: {
+          requests: pending.map((id, n) => ({
+            id: String(n),
+            headers: { 'Content-Type': 'application/json' },
+            ...request(id),
+          })),
+        },
+      });
+      const byId = new Map((res.responses ?? []).map((r) => [Number(r.id), r]));
+      const throttled = [];
+      let wait = 0;
+      pending.forEach((id, n) => {
+        const r = byId.get(n);
+        if (r && r.status >= 200 && r.status < 300) return;
+        if (r?.status === 429 && attempt < 3) {
+          throttled.push(id);
+          wait = Math.max(wait, Number(r.headers?.['Retry-After'] ?? 2));
+        } else failed.push(id);
+      });
+      pending = throttled;
+      if (pending.length) await new Promise((ok) => setTimeout(ok, Math.min(wait, 30) * 1000));
+    }
+    onProgress?.(Math.min(i + 20, ids.length), ids.length);
+  }
+  return failed;
+}
+
+const toSummary = (m) => ({
+  id: m.id,
+  from: toAddress(m.from),
+  subject: m.subject ?? '',
+  snippet: m.bodyPreview ?? '',
+  date: Date.parse(m.receivedDateTime),
+});
 
 // Newest inbox messages that are read (or unread), newest first. Graph only
 // allows $orderby with $filter when the ordered property also comes first in
@@ -164,11 +195,5 @@ async function listInbox(account, isRead, top) {
     `${API}/mailFolders/inbox/messages?$filter=${filter}&$orderby=receivedDateTime%20desc` +
       `&$top=${top}&$select=id,subject,from,receivedDateTime,bodyPreview`,
   );
-  return (list.value ?? []).map((m) => ({
-    id: m.id,
-    from: toAddress(m.from),
-    subject: m.subject ?? '',
-    snippet: m.bodyPreview ?? '',
-    date: Date.parse(m.receivedDateTime),
-  }));
+  return (list.value ?? []).map((m) => ({ ...toSummary(m), read: isRead }));
 }

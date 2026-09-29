@@ -27,6 +27,7 @@ const icon = {
   login: svg('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>'),
   remove: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>'),
   lock: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
   clip: svg('<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'),
 };
 
@@ -36,7 +37,7 @@ const state = {
   accounts: {},
   mail: {},
   settings: {},
-  selected: null, // { accountId, messageId }
+  selected: null, // { accountId, messageId, folder } (folder "spam" or undefined)
   message: null, // full message currently in the reader
   showRemoteImages: false,
   view: null, // { provider, account } filter for the list, set below
@@ -47,6 +48,8 @@ const state = {
   progress: null, // "Marking 120 of 812…" while a bulk action runs
   recentOpen: new Set(), // accounts whose "Recently read" section is expanded
   recent: new Map(), // accountId -> { loading, messages, error }
+  spamOpen: new Set(), // accounts whose "Spam" section is expanded
+  spam: new Map(), // accountId -> { loading, messages, error }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -331,6 +334,7 @@ function renderSidebar() {
       <input type="checkbox" class="pick pick-all" data-action="pick-all" ${allListed ? 'checked' : ''} aria-label="Select all">
       <span class="list-label">${label}</span>
       ${selecting ? `<button class="tool-btn small" data-action="bulk-read" ${state.progress ? 'disabled' : ''}>${icon.mailOpen}Mark read</button>
+        <button class="tool-btn small danger" data-action="bulk-delete" ${state.progress ? 'disabled' : ''}>${icon.trash}Delete</button>
         <button class="link-btn" data-action="bulk-clear" ${state.progress ? 'hidden' : ''}>Clear</button>` : ''}
     </div>`;
   }
@@ -379,7 +383,7 @@ function renderSidebar() {
       ${head}
       ${rows ? `<ul class="messages">${rows}</ul>` : ''}
       ${more}${empty}
-      ${account ? renderRecent(state.accounts[account]) : ''}
+      ${account ? renderRecent(state.accounts[account]) + renderSpam(state.accounts[account]) : ''}
       ${footer}
     </div>`;
   sidebar.querySelector('.pane').scrollTop = scroll;
@@ -391,32 +395,64 @@ function renderSidebar() {
 // default and fetched only when opened.
 const RECENT_LIMIT = 10;
 
+const isSelected = (accountId, messageId, folder) =>
+  state.selected?.accountId === accountId && state.selected?.messageId === messageId && state.selected?.folder === folder;
+
+// Rows of a collapsible section ("Recently read", "Spam") of one account.
+function sectionRows(a, r, emptyText, folder) {
+  if (!r || r.loading) return '<li class="recent-note">Loading…</li>';
+  if (r.error) return `<li class="recent-note error">${esc(r.error)}</li>`;
+  if (!r.messages.length) return `<li class="recent-note">${emptyText}</li>`;
+  return r.messages.map((msg) => `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(a.id, msg.id, folder) ? ' selected' : ''}"><span class="lead"></span>
+      <button class="msg" data-action="open" data-account="${esc(a.id)}" data-message="${esc(msg.id)}"${folder ? ` data-folder="${folder}"` : ''}>
+        <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
+        <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
+      </button></li>`).join('');
+}
+
 function renderRecent(a) {
-  const aid = esc(a.id);
   const open = state.recentOpen.has(a.id);
-  const r = state.recent.get(a.id);
-  let body = '';
-  if (open) {
-    if (!r || r.loading) body = '<li class="recent-note">Loading…</li>';
-    else if (r.error) body = `<li class="recent-note error">${esc(r.error)}</li>`;
-    else if (!r.messages.length) body = '<li class="recent-note">No read emails in the inbox.</li>';
-    else {
-      body = r.messages.map((msg) => {
-        const sel = state.selected?.accountId === a.id && state.selected?.messageId === msg.id;
-        return `<li class="msg-row read recent${sel ? ' selected' : ''}"><span class="lead"></span>
-          <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}">
-            <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
-            <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
-          </button></li>`;
-      }).join('');
-    }
-  }
   return `<div class="recent-block">
-    <button class="recent-toggle" data-action="toggle-recent" data-account="${aid}" aria-expanded="${open}">
+    <button class="recent-toggle" data-action="toggle-recent" data-account="${esc(a.id)}" aria-expanded="${open}">
       ${icon.chevron.replace('<svg', '<svg class="chevron"')}Recently read
     </button>
-    ${open ? `<ul class="messages recent-list">${body}</ul>` : ''}
+    ${open ? `<ul class="messages recent-list">${sectionRows(a, state.recent.get(a.id), 'No read emails in the inbox.')}</ul>` : ''}
   </div>`;
+}
+
+// "Spam": the newest emails in the account's spam folder, collapsed by
+// default and fetched only when opened. Its unread count is kept up to date
+// by the regular checks and shown only here.
+const SPAM_LIMIT = 20;
+
+function renderSpam(a) {
+  if (!providers[a.provider].fetchSpam) return '';
+  const open = state.spamOpen.has(a.id);
+  const unread = state.mail[a.id]?.spamUnread ?? 0;
+  return `<div class="recent-block">
+    <button class="recent-toggle" data-action="toggle-spam" data-account="${esc(a.id)}" aria-expanded="${open}">
+      ${icon.chevron.replace('<svg', '<svg class="chevron"')}Spam${unread ? `<span class="spam-count" title="${unread} unread in spam">${unread}</span>` : ''}
+    </button>
+    ${open ? `<ul class="messages recent-list">${sectionRows(a, state.spam.get(a.id), 'No spam.', 'spam')}</ul>` : ''}
+  </div>`;
+}
+
+async function loadSpam(id) {
+  const a = state.accounts[id];
+  state.spam.set(id, { loading: true, messages: [] });
+  renderSidebar();
+  try {
+    state.spam.set(id, { messages: await providers[a.provider].fetchSpam(a, SPAM_LIMIT) });
+  } catch (e) {
+    state.spam.set(id, { messages: [], error: e.name === 'AuthRequiredError' ? 'Sign in again to load spam.' : e.message });
+  }
+  renderSidebar();
+}
+
+// Keeps the Spam count in step after reading, deleting or rescuing a spam email.
+async function adjustSpamUnread(id, delta) {
+  const m = await getMail(id);
+  if (m && delta) await patchMail(id, { spamUnread: Math.max(0, (m.spamUnread ?? 0) + delta) });
 }
 
 async function loadRecent(id) {
@@ -500,6 +536,79 @@ async function bulkMarkRead() {
     toast(`Marked ${done} as read`);
   }
   renderSidebar();
+}
+
+// Moves the ticked emails to Trash after a confirmation. Only listed emails
+// are deleted, even with "select all N unread" (unlisted ones are never
+// touched without being seen).
+async function bulkDelete() {
+  const byAccount = new Map();
+  for (const key of state.checked) {
+    const [id, mid] = splitKey(key);
+    if (!state.accounts[id]) continue;
+    if (!byAccount.has(id)) byAccount.set(id, []);
+    byAccount.get(id).push(mid);
+  }
+  const total = [...byAccount.values()].reduce((n, ids) => n + ids.length, 0);
+  if (!total || !(await confirmDelete(byAccount, total))) return;
+
+  const setProgress = (text) => {
+    state.progress = text;
+    renderSidebar();
+  };
+  let done = 0;
+  let failedTotal = 0;
+  try {
+    for (const [id, ids] of byAccount) {
+      const a = state.accounts[id];
+      setProgress(`Deleting ${done + 1}–${done + ids.length} of ${total}…`);
+      const failed = new Set(await providers[a.provider].trashMany(a, ids));
+      const ok = new Set(ids.filter((x) => !failed.has(x)));
+      done += ok.size;
+      failedTotal += failed.size;
+      const m = await getMail(id);
+      if (m) {
+        const dropped = (m.messages ?? []).filter((x) => ok.has(x.id));
+        await patchMail(id, {
+          messages: (m.messages ?? []).filter((x) => !ok.has(x.id)),
+          unreadCount: Math.max(0, (m.unreadCount ?? 0) - dropped.filter((x) => !x.read).length),
+        });
+      }
+      for (const mid of ok) state.checked.delete(keyOf(id, mid));
+      if (state.selected?.accountId === id && !state.selected.folder && ok.has(state.selected.messageId)) closeReader();
+    }
+  } finally {
+    state.allUnread = false;
+    setProgress(null);
+  }
+  if (failedTotal) toast(`${failedTotal} couldn't be deleted. They are still selected.`, { error: true });
+  else {
+    state.checked.clear();
+    toast(`Moved ${done} to Trash`);
+  }
+  renderSidebar();
+}
+
+// Resolves true only when Delete is clicked; Cancel is focused by default.
+function confirmDelete(byAccount, total) {
+  const dialog = $('deleteDialog');
+  $('deleteTitle').textContent = `Move ${total} email${total > 1 ? 's' : ''} to Trash?`;
+  const lines = [...byAccount].map(([id, ids]) => {
+    const a = state.accounts[id];
+    const where = a.provider === 'outlook' ? 'Deleted Items' : 'Trash';
+    return `<li>${pico(a.provider)}<span><b>${ids.length}</b> from ${esc(a.email)} → ${where}</span></li>`;
+  });
+  const unlisted = state.allUnread
+    ? viewAccounts().reduce((n, a) => n + unreadOf(a), 0) - total : 0;
+  $('deleteDetails').innerHTML = `<ul class="delete-list">${lines.join('')}</ul>
+    ${unlisted > 0 ? `<p class="dialog-note">Only the listed emails are deleted; the other ${unlisted} unread stay in the inbox.</p>` : ''}
+    <p class="dialog-note">They can be restored from there for about 30 days.</p>`;
+  dialog.returnValue = ''; // Escape keeps the previous value otherwise
+  dialog.showModal();
+  $('deleteCancel').focus();
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'delete'), { once: true });
+  });
 }
 
 function openAddMenu(button) {
@@ -699,9 +808,22 @@ async function updateCachedMessage(id, messageId, fn) {
   await patchMail(id, { messages, unreadCount: Math.max(0, (m.unreadCount ?? 0) + unreadDelta) });
 }
 
-async function setRead(id, messageId, read) {
+async function setRead(id, messageId, read, folder) {
   const a = state.accounts[id];
-  await providers[a.provider].setRead(a, messageId, read);
+  await providers[a.provider].setRead(a, messageId, read, { folder });
+  if (folder === 'spam') {
+    const item = state.spam.get(id)?.messages?.find((m) => m.id === messageId);
+    if (item && item.read !== read) {
+      item.read = read;
+      await adjustSpamUnread(id, read ? -1 : 1);
+    }
+    if (state.message?.id === messageId) {
+      state.message.isRead = read;
+      renderReaderToolbar();
+    }
+    renderSidebar();
+    return;
+  }
   await updateCachedMessage(id, messageId, (msg) => ({
     message: { ...msg, read },
     unreadDelta: Boolean(msg.read) === read ? 0 : read ? -1 : 1,
@@ -719,8 +841,14 @@ async function setRead(id, messageId, read) {
   }
 }
 
-async function trashMessage(id, messageId) {
+async function trashMessage(id, messageId, folder) {
   const a = state.accounts[id];
+  if (folder === 'spam') {
+    await providers[a.provider].trash(a, messageId, { folder });
+    await leaveSpamMessage(id, messageId);
+    toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
+    return;
+  }
   // The email may be in the unread list, in "Recently read", or both (an
   // unread email that was just opened). Move on to its neighbour in the list
   // it was opened from.
@@ -735,12 +863,38 @@ async function trashMessage(id, messageId) {
   await updateCachedMessage(id, messageId, (msg) => ({ message: null, unreadDelta: msg.read ? 0 : -1 }));
   toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
   if (next) openMessage(next.accountId, next.id);
-  else {
-    state.selected = null;
-    state.message = null;
-    renderReaderEmpty();
-    renderSidebar();
-  }
+  else closeReader();
+}
+
+function closeReader() {
+  state.selected = null;
+  state.message = null;
+  renderReaderEmpty();
+  renderSidebar();
+}
+
+// A spam email left the Spam folder (deleted or not spam): drop it from the
+// list, fix the count and open its neighbour.
+async function leaveSpamMessage(id, messageId) {
+  const r = state.spam.get(id);
+  const list = r?.messages ?? [];
+  const idx = list.findIndex((m) => m.id === messageId);
+  const gone = list[idx];
+  const next = idx === -1 ? null : list[idx + 1] ?? list[idx - 1];
+  if (r) r.messages = list.filter((m) => m.id !== messageId);
+  // Opened emails were marked read already, so only unread ones change the count.
+  if (gone && gone.read === false) await adjustSpamUnread(id, -1);
+  if (next) openMessage(id, next.id, { folder: 'spam' });
+  else closeReader();
+}
+
+async function notSpam(id, messageId) {
+  const a = state.accounts[id];
+  const failed = await providers[a.provider].notSpam(a, [messageId]);
+  if (failed.length) throw new Error("Couldn't move it to the inbox. Try again.");
+  await leaveSpamMessage(id, messageId);
+  toast('Moved to Inbox');
+  refreshOne(id);
 }
 
 // ---------- reader ----------
@@ -751,9 +905,9 @@ function renderReaderEmpty() {
 
 let openSeq = 0;
 
-async function openMessage(id, messageId) {
+async function openMessage(id, messageId, { folder } = {}) {
   const seq = ++openSeq;
-  state.selected = { accountId: id, messageId };
+  state.selected = { accountId: id, messageId, folder };
   state.message = null;
   state.showRemoteImages = false;
   markSeen(keyOf(id, messageId));
@@ -763,22 +917,23 @@ async function openMessage(id, messageId) {
   const a = state.accounts[id];
   const provider = providers[a.provider];
   try {
-    const msg = await provider.getMessage(a, messageId);
+    const msg = await provider.getMessage(a, messageId, { folder });
     if (seq !== openSeq) return;
     msg.accountId = id;
+    msg.folder = folder;
     msg.inlineImages = await loadInlineImages(provider, a, msg);
     if (seq !== openSeq) return;
     state.message = msg;
     renderReader();
     // An encrypted body that could not be shown does not count as read.
     if (state.settings.markReadOnOpen && !msg.isRead && !msg.encrypted) {
-      setRead(id, messageId, true).catch((e) => toast(`Couldn't mark as read: ${e.message}`, { error: true }));
+      setRead(id, messageId, true, folder).catch((e) => toast(`Couldn't mark as read: ${e.message}`, { error: true }));
     }
   } catch (e) {
     if (seq !== openSeq) return;
     const gone = e.status === 404;
     reader.innerHTML = `<div class="reader-status error">${gone ? 'This email no longer exists. It may have been deleted elsewhere.' : esc(e.message)}</div>`;
-    if (gone) updateCachedMessage(id, messageId, (m) => ({ message: null, unreadDelta: m.read ? 0 : -1 }));
+    if (gone && !folder) updateCachedMessage(id, messageId, (m) => ({ message: null, unreadDelta: m.read ? 0 : -1 }));
   }
 }
 
@@ -792,7 +947,7 @@ async function loadInlineImages(provider, account, msg) {
         let cid = att.contentId;
         let bytes;
         if (provider.resolveInline) ({ contentId: cid, bytes } = await provider.resolveInline(account, msg.id, att));
-        else bytes = await provider.getAttachment(account, msg.id, att);
+        else bytes = await provider.getAttachment(account, msg.id, att, { folder: msg.folder });
         if (cid) map.set(cid, bytesToDataUrl(bytes, att.mimeType));
       } catch (e) {
         console.warn('inline image failed', e);
@@ -846,6 +1001,7 @@ function renderReaderToolbar() {
   const providerName = providers[state.accounts[msg.accountId]?.provider]?.name ?? '';
   bar.innerHTML = `
     <button class="tool-btn" data-action="${msg.isRead ? 'mark-unread' : 'mark-read'}">${msg.isRead ? icon.mail + 'Mark unread' : icon.mailOpen + 'Mark read'}</button>
+    ${msg.folder === 'spam' ? `<button class="tool-btn" data-action="not-spam">${icon.inbox}Not spam</button>` : ''}
     <button class="tool-btn danger" data-action="trash">${icon.trash}Delete</button>
     <span class="spacer"></span>
     ${msg.webUrl ? `<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button>` : ''}`;
@@ -856,7 +1012,7 @@ async function downloadAttachment(index) {
   const att = msg.attachments[index];
   const a = state.accounts[msg.accountId];
   try {
-    const bytes = await providers[a.provider].getAttachment(a, msg.id, att);
+    const bytes = await providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
     const url = URL.createObjectURL(new Blob([bytes], { type: att.mimeType || 'application/octet-stream' }));
     const link = Object.assign(document.createElement('a'), { href: url, download: att.filename });
     link.click();
@@ -905,6 +1061,13 @@ document.addEventListener('click', async (e) => {
       }
       state.recentOpen.add(id);
       return loadRecent(id);
+    case 'toggle-spam':
+      if (state.spamOpen.has(id)) {
+        state.spamOpen.delete(id);
+        return renderSidebar();
+      }
+      state.spamOpen.add(id);
+      return loadSpam(id);
     case 'pick':
       toggleChecked(el.dataset.key, el.checked, { range: e.shiftKey });
       return renderSidebar();
@@ -920,11 +1083,13 @@ document.addEventListener('click', async (e) => {
       return renderSidebar();
     case 'bulk-read':
       return withBusy(el, bulkMarkRead);
+    case 'bulk-delete':
+      return withBusy(el, bulkDelete);
     case 'account-menu':
       e.stopPropagation();
       return openAccountMenu(el, id);
     case 'open':
-      return openMessage(id, messageId);
+      return openMessage(id, messageId, { folder: el.dataset.folder });
     case 'signin':
       return addAccount(state.accounts[id].provider, state.accounts[id].email);
     case 'refresh-account':
@@ -949,9 +1114,11 @@ document.addEventListener('click', async (e) => {
       return saveSettings({ showHidden: true });
     case 'mark-read':
     case 'mark-unread':
-      return withBusy(el, () => setRead(state.message.accountId, state.message.id, action === 'mark-read'));
+      return withBusy(el, () => setRead(state.message.accountId, state.message.id, action === 'mark-read', state.message.folder));
     case 'trash':
-      return withBusy(el, () => trashMessage(state.message.accountId, state.message.id));
+      return withBusy(el, () => trashMessage(state.message.accountId, state.message.id, state.message.folder));
+    case 'not-spam':
+      return withBusy(el, () => notSpam(state.message.accountId, state.message.id));
     case 'open-web':
       return chrome.tabs.create({ url: state.message.webUrl });
     case 'show-images':
