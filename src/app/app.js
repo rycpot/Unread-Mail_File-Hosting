@@ -39,6 +39,8 @@ const state = {
   refreshing: new Set(),
   checked: new Map(), // accountId -> Set of checked message ids
   lastPicked: null, // { accountId, messageId } anchor for shift-click ranges
+  allUnread: new Set(), // accounts where "all unread", beyond those listed, is selected
+  progress: new Map(), // accountId -> "Marking 120 of 812…" while a bulk action runs
 };
 
 const $ = (id) => document.getElementById(id);
@@ -150,7 +152,7 @@ function renderSidebar() {
     const list = accounts.filter((a) => a.provider === p.id);
     html += `<section class="provider">
       <div class="provider-head">
-        <span class="provider-mark ${p.id}">${p.name[0]}</span>${esc(p.name)}
+        <span class="provider-pill ${p.id}"><span class="provider-mark">${p.name[0]}</span>${esc(p.name)}</span>
         <span class="spacer"></span>
         <button class="add-btn" data-action="add" data-provider="${p.id}">${icon.plus}Add account</button>
       </div>
@@ -200,10 +202,20 @@ function renderAccount(a) {
   const more = count > messages.length && messages.length
     ? `<li class="stale-note">Showing the newest ${messages.length} of ${count} unread.</li>` : '';
   const allChecked = messages.length > 0 && checked.size === messages.length;
+  if (!allChecked) state.allUnread.delete(a.id);
+  const all = state.allUnread.has(a.id);
+  const progress = state.progress.get(a.id);
+  // Gmail-style: once every listed email is ticked, offer to extend the
+  // selection to all unread mail in the inbox, including unlisted ones.
+  const label = progress
+    ? esc(progress)
+    : all ? `All ${count} unread selected`
+    : `${checked.size} selected${allChecked && count > messages.length
+      ? ` · <button class="link-btn" data-action="select-all-unread" data-account="${aid}">Select all ${count} unread</button>` : ''}`;
   const bulkBar = checked.size
-    ? `<div class="bulk-bar"><span>${checked.size} selected</span>
-        <button class="tool-btn small" data-action="bulk-read" data-account="${aid}">${icon.mailOpen}Mark read</button>
-        <button class="link-btn" data-action="bulk-clear" data-account="${aid}">Clear</button></div>`
+    ? `<div class="bulk-bar"><span>${label}</span>
+        <button class="tool-btn small" data-action="bulk-read" data-account="${aid}" ${progress ? 'disabled' : ''}>${icon.mailOpen}Mark read</button>
+        <button class="link-btn" data-action="bulk-clear" data-account="${aid}" ${progress ? 'hidden' : ''}>Clear</button></div>`
     : '';
 
   return `<div class="account${isCollapsed ? ' collapsed' : ''}${a.hidden ? ' is-hidden' : ''}">
@@ -212,7 +224,7 @@ function renderAccount(a) {
         ${allChecked ? 'checked' : ''} data-partial="${checked.size > 0 && !allChecked}" title="Select all" aria-label="Select all emails in ${esc(a.email)}">
       <button class="account-toggle" data-action="toggle" data-account="${esc(a.id)}" aria-expanded="${!isCollapsed}">
         ${icon.chevron.replace('<svg', '<svg class="chevron"')}
-        <span class="account-email" title="${esc(a.email)}">${esc(a.email)}</span>
+        <span class="account-email" style="--h: ${accountHue(a)}" title="${esc(a.email)}">${esc(a.email)}</span>
         ${status === 'auth' || status === 'error' ? `<span class="status-dot ${status}" title="${status === 'auth' ? 'Sign-in needed' : 'Refresh failed'}"></span>` : ''}
         <span class="count${count ? '' : ' zero'}">${count}</span>
       </button>
@@ -250,7 +262,39 @@ function toggleChecked(id, messageId, on, { range = false } = {}) {
   state.lastPicked = { accountId: id, messageId };
 }
 
+// Distinct pill colours per account, assigned in the order accounts were added
+// so each keeps its colour. Red and blue are left to the Gmail/Outlook pills.
+const ACCOUNT_HUES = [174, 262, 36, 330, 145, 20, 290, 55, 195, 0];
+function accountHue(a) {
+  const order = Object.values(state.accounts).sort((x, y) => (x.addedAt ?? 0) - (y.addedAt ?? 0));
+  return ACCOUNT_HUES[Math.max(0, order.findIndex((x) => x.id === a.id)) % ACCOUNT_HUES.length];
+}
+
+async function markAllUnreadRead(id) {
+  const a = state.accounts[id];
+  const setProgress = (text) => {
+    text ? state.progress.set(id, text) : state.progress.delete(id);
+    renderSidebar();
+  };
+  setProgress('Finding unread emails…');
+  try {
+    const { total, failed } = await providers[a.provider].markAllRead(a, (done, n) => setProgress(`Marking ${done} of ${n}…`));
+    state.allUnread.delete(id);
+    state.checked.delete(id);
+    if (state.message?.accountId === id && !failed.includes(state.message.id)) {
+      state.message.isRead = true;
+      renderReaderToolbar();
+    }
+    if (failed.length) toast(`${failed.length} of ${total} couldn't be marked as read.`, { error: true });
+    else toast(`Marked all ${total} as read`);
+  } finally {
+    setProgress(null);
+    await refreshOne(id);
+  }
+}
+
 async function bulkMarkRead(id) {
+  if (state.allUnread.has(id)) return markAllUnreadRead(id);
   const a = state.accounts[id];
   const ids = [...(state.checked.get(id) ?? [])];
   if (!ids.length) return;
@@ -528,8 +572,12 @@ document.addEventListener('click', async (e) => {
       state.checked.set(id, new Set(el.checked ? ids : []));
       return renderSidebar();
     }
+    case 'select-all-unread':
+      state.allUnread.add(id);
+      return renderSidebar();
     case 'bulk-clear':
       state.checked.delete(id);
+      state.allUnread.delete(id);
       return renderSidebar();
     case 'bulk-read':
       await withBusy(el, () => bulkMarkRead(id));

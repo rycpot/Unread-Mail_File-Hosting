@@ -77,14 +77,31 @@ export const gmail = {
 
   // One request per 1000 messages; batchModify is all-or-nothing, so there are
   // no per-message failures to report (errors throw).
-  async setReadMany(account, ids, read) {
+  async setReadMany(account, ids, read, onProgress) {
     for (let i = 0; i < ids.length; i += 1000) {
       await apiFetch(account, `${API}/messages/batchModify`, {
         method: 'POST',
         body: { ids: ids.slice(i, i + 1000), ...(read ? { removeLabelIds: ['UNREAD'] } : { addLabelIds: ['UNREAD'] }) },
       });
+      onProgress?.(Math.min(i + 1000, ids.length), ids.length);
     }
     return [];
+  },
+
+  // Every unread inbox message, not just the ones listed in the sidebar.
+  async markAllRead(account, onProgress) {
+    const ids = [];
+    let pageToken = '';
+    do {
+      const page = await apiFetch(
+        account,
+        `${API}/messages?labelIds=INBOX&labelIds=UNREAD&maxResults=500${pageToken ? `&pageToken=${pageToken}` : ''}`,
+      );
+      ids.push(...(page.messages ?? []).map((m) => m.id));
+      pageToken = page.nextPageToken ?? '';
+    } while (pageToken);
+    const failed = await this.setReadMany(account, ids, true, onProgress);
+    return { total: ids.length, failed };
   },
 
   // Moves to Trash (recoverable for 30 days), never a permanent delete.

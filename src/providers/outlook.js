@@ -102,27 +102,56 @@ export const outlook = {
     await apiFetch(account, `${API}/messages/${enc(id)}`, { method: 'PATCH', body: { isRead: read } });
   },
 
-  // Graph JSON batching, 20 requests per call. Returns the ids that failed.
-  async setReadMany(account, ids, read) {
+  // Graph JSON batching, 20 requests per call. Requests throttled with 429
+  // are retried after the server's Retry-After. Returns the ids that failed.
+  async setReadMany(account, ids, read, onProgress) {
     const failed = [];
     for (let i = 0; i < ids.length; i += 20) {
-      const chunk = ids.slice(i, i + 20);
-      const res = await apiFetch(account, 'https://graph.microsoft.com/v1.0/$batch', {
-        method: 'POST',
-        body: {
-          requests: chunk.map((id, n) => ({
-            id: String(n),
-            method: 'PATCH',
-            url: `/me/messages/${enc(id)}`,
-            headers: { 'Content-Type': 'application/json' },
-            body: { isRead: read },
-          })),
-        },
-      });
-      const ok = new Set((res.responses ?? []).filter((r) => r.status >= 200 && r.status < 300).map((r) => Number(r.id)));
-      chunk.forEach((id, n) => ok.has(n) || failed.push(id));
+      let pending = ids.slice(i, i + 20);
+      for (let attempt = 0; pending.length && attempt < 4; attempt++) {
+        const res = await apiFetch(account, 'https://graph.microsoft.com/v1.0/$batch', {
+          method: 'POST',
+          body: {
+            requests: pending.map((id, n) => ({
+              id: String(n),
+              method: 'PATCH',
+              url: `/me/messages/${enc(id)}`,
+              headers: { 'Content-Type': 'application/json' },
+              body: { isRead: read },
+            })),
+          },
+        });
+        const byId = new Map((res.responses ?? []).map((r) => [Number(r.id), r]));
+        const throttled = [];
+        let wait = 0;
+        pending.forEach((id, n) => {
+          const r = byId.get(n);
+          if (r && r.status >= 200 && r.status < 300) return;
+          if (r?.status === 429 && attempt < 3) {
+            throttled.push(id);
+            wait = Math.max(wait, Number(r.headers?.['Retry-After'] ?? 2));
+          } else failed.push(id);
+        });
+        pending = throttled;
+        if (pending.length) await new Promise((ok) => setTimeout(ok, Math.min(wait, 30) * 1000));
+      }
+      onProgress?.(Math.min(i + 20, ids.length), ids.length);
     }
     return failed;
+  },
+
+  // Every unread inbox message, not just the ones listed in the sidebar. Ids are
+  // collected first so marking does not shift the pages being read.
+  async markAllRead(account, onProgress) {
+    const ids = [];
+    let url = `${API}/mailFolders/inbox/messages?$filter=${enc('isRead eq false')}&$select=id&$top=500`;
+    while (url) {
+      const page = await apiFetch(account, url);
+      ids.push(...(page.value ?? []).map((m) => m.id));
+      url = page['@odata.nextLink'];
+    }
+    const failed = await this.setReadMany(account, ids, true, onProgress);
+    return { total: ids.length, failed };
   },
 
   // Moves to Deleted Items (recoverable), never a permanent delete.
