@@ -15,42 +15,6 @@ Trash or Deleted Items), without opening the webmail site.
 
 Any number of accounts per provider.
 
-## Layout
-
-```
-┌rail┬──────── list (35%) ────────┬──────────── reader (65%) ────────────┐
-│All4│ (All accounts)(anna·1)(…)  │ [Mark read] [Delete]    [Open in …]  │
-│ G 1│ ☐ 4 unread                 │ Subject                               │
-│ O  │ i  Apple ●         11:52   │ From / To / Date                      │
-│ i 2│    Your receipt from Apple │ ───────────────────────────────────── │
-│ Y 1│    anna@icloud.com         │                                       │
-│ A  │ G  Yahoo           11:40   │   email body (sandboxed)              │
-│    │    …                       │                                       │
-│ +  │                            │                                       │
-└────┴────────────────────────────┴───────────────────────────────────────┘
-```
-
-- **Provider rail:** "All" plus one icon per provider, each with its unread count.
-  Providers with nothing unread are faded; one with a signed-out account shows an
-  amber dot. **+** at the bottom adds an account.
-- **One list, newest first:** every unread email in the current view, whichever
-  account it arrived in, with a blue dot on emails that came in since you last left
-  the tab. Chips at the top narrow the list to one account (in "All", only accounts
-  with unread mail or a problem get a chip).
-- **Account view** (click a chip): the account's address, its ⋯ menu (refresh, sign
-  in again, hide, remove) and **Recently read**, which loads the last 10 read inbox
-  emails on demand.
-- **Selecting:** hovering a row turns its provider icon into a checkbox. Tick emails
-  (shift-click for a range) or use the select-all box, then **Mark read**; this works
-  across accounts. When more unread mail exists than is listed, **Select all N**
-  extends it to every unread inbox email in the view.
-- Accounts never disappear on their own. If one signs out or fails to refresh, it
-  shows a notice and keeps its last known emails. Only **⋯ → Remove account**
-  deletes one.
-- **⋯ → Hide** hides an account and leaves it out of the badge count. You can
-  still reach it through *Settings → Show hidden accounts*.
-- The toolbar badge shows the total unread count across visible accounts.
-
 ## Setup
 
 See [docs/SETUP.md](docs/SETUP.md). You need one Google OAuth client and one Microsoft
