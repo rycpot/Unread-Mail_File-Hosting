@@ -1,68 +1,67 @@
 // New-mail notifications and chime (background service worker only).
 //
-// New emails from any account are collected for a short window and shown as
-// ONE notification with ONE chime, so push updates, several accounts finishing
-// a refresh at once, or a burst of arrivals never produce a string of sounds.
-// The chime also has a cooldown, and emails already notified are remembered.
+// The first new email shows a notification and plays the chime at once. While
+// that notification stays open (Chrome's "Persistent" style keeps it until you
+// close it), further new emails silently update it to "N new emails" with each
+// provider's icon: no new banner, no sound. Once it is closed (or clicked), the
+// next new email alerts again straight away. With notifications off but sound
+// on, chimes are at least SOUND_ONLY_GAP_MS apart. Emails already notified are
+// remembered, so the same email never alerts twice.
 
 import { providers } from './providers/index.js';
 import { getAccounts, getSettings } from './storage.js';
 
-const WINDOW_MS = 2500; // wait this long after the latest new email...
-const MAX_WAIT_MS = 6000; // ...but never longer than this after the first
-const SOUND_COOLDOWN_MS = 10000;
+const SOUND_ONLY_GAP_MS = 15000;
 const NOTIFICATION_ID = 'new-mail';
 const SEEN_KEY = 'notifiedKeys'; // chrome.storage.session: survives worker restarts
 const SEEN_MAX = 500;
+const ACTIVE_KEY = 'activeNotification'; // emails shown in the open notification
 
-let batch = [];
-let flushTimer = null;
-let firstAt = 0;
 let lastSoundAt = 0;
+let queue = Promise.resolve(); // handle arrivals one batch at a time
 
-async function alreadyNotified() {
-  return new Set((await chrome.storage.session.get(SEEN_KEY))[SEEN_KEY] ?? []);
-}
+const keyOf = (it) => `${it.accountId}::${it.id}`;
 
 // items: [{ accountId, provider, id, from, subject }]
-export async function queueNewMail(items) {
-  const seen = await alreadyNotified();
-  const fresh = items.filter((it) => {
-    const key = `${it.accountId}::${it.id}`;
-    return !seen.has(key) && !batch.some((b) => `${b.accountId}::${b.id}` === key);
-  });
-  if (!fresh.length) return;
-  batch.push(...fresh);
-  firstAt ||= Date.now();
-  clearTimeout(flushTimer);
-  const wait = Math.max(0, Math.min(WINDOW_MS, firstAt + MAX_WAIT_MS - Date.now()));
-  flushTimer = setTimeout(flush, wait);
+export function queueNewMail(items) {
+  queue = queue.then(() => handle(items)).catch((e) => console.warn('[notify]', e));
+  return queue;
 }
 
-async function flush() {
-  const items = batch;
-  batch = [];
-  firstAt = 0;
-  flushTimer = null;
-  if (!items.length) return;
-
-  const seen = [...(await alreadyNotified()), ...items.map((it) => `${it.accountId}::${it.id}`)];
-  await chrome.storage.session.set({ [SEEN_KEY]: seen.slice(-SEEN_MAX) });
+async function handle(items) {
+  const session = await chrome.storage.session.get([SEEN_KEY, ACTIVE_KEY]);
+  const seen = new Set(session[SEEN_KEY] ?? []);
+  const accounts = await getAccounts();
+  // Hidden accounts never alert.
+  const fresh = items.filter((it) => !seen.has(keyOf(it)) && accounts[it.accountId] && !accounts[it.accountId].hidden);
+  if (!fresh.length) return;
+  await chrome.storage.session.set({ [SEEN_KEY]: [...seen, ...fresh.map(keyOf)].slice(-SEEN_MAX) });
 
   const settings = await getSettings();
-  // Hidden accounts never alert.
-  const accounts = await getAccounts();
-  const visible = items.filter((it) => accounts[it.accountId] && !accounts[it.accountId].hidden);
-  if (!visible.length) return;
-
-  const shown = settings.notifyEnabled ? await show(visible) : null;
+  let shown = null;
   let sound = false;
-  if (settings.soundEnabled && Date.now() - lastSoundAt >= SOUND_COOLDOWN_MS) {
+  if (settings.notifyEnabled) {
+    // Is our notification still open (on screen or in Notification Center)?
+    const open = Boolean((await chrome.notifications.getAll())[NOTIFICATION_ID]);
+    const active = open ? session[ACTIVE_KEY] ?? [] : [];
+    const all = [...active, ...fresh];
+    shown = await show(all, { update: open });
+    await chrome.storage.session.set({ [ACTIVE_KEY]: all });
+    sound = settings.soundEnabled && !shown.updated;
+  } else {
+    sound = settings.soundEnabled && Date.now() - lastSoundAt >= SOUND_ONLY_GAP_MS;
+  }
+  if (sound) {
     lastSoundAt = Date.now();
-    sound = true;
     await playChime();
   }
-  await log({ emails: visible.length, shown, sound });
+  await log({ emails: fresh.length, shown, sound });
+}
+
+// The notification was closed (by you, by clicking it, or by the system): the
+// next new email starts a fresh one, with sound.
+export async function notificationClosed(id) {
+  if (id === NOTIFICATION_ID) await chrome.storage.session.remove([ACTIVE_KEY, 'notificationTarget']);
 }
 
 // A short record of recent alerts (session storage, cleared when Chrome quits),
@@ -73,7 +72,7 @@ async function log(entry) {
   await chrome.storage.session.set({ notifyLog: notifyLog.slice(-20) });
 }
 
-async function show(items) {
+async function show(items, { update = false } = {}) {
   const single = items.length === 1 ? items[0] : null;
   const order = Object.keys(providers);
   const providerIds = [...new Set(items.map((it) => it.provider))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
@@ -85,11 +84,12 @@ async function show(items) {
     silent: true, // the extension plays its own chime (or none)
     priority: 0,
   };
-  // One notification at a time: a newer batch replaces the previous one.
-  await chrome.notifications.clear(NOTIFICATION_ID);
-  await chrome.notifications.create(NOTIFICATION_ID, options);
-  await chrome.storage.session.set({ notificationTarget: single ? `${single.accountId}::${single.id}` : null });
-  return { title: options.title, message: options.message, icons: single ? [single.provider] : providerIds };
+  // Update in place while it is open; otherwise (or if it was closed in the
+  // meantime) start a new one.
+  const updated = update && (await chrome.notifications.update(NOTIFICATION_ID, options));
+  if (!updated) await chrome.notifications.create(NOTIFICATION_ID, options);
+  await chrome.storage.session.set({ notificationTarget: single ? keyOf(single) : null });
+  return { title: options.title, message: options.message, icons: single ? [single.provider] : providerIds, updated: Boolean(updated) };
 }
 
 // The providers' icons side by side (or in a grid), as one image.
@@ -131,6 +131,8 @@ export async function playChime() {
 export async function testNotification() {
   const settings = await getSettings();
   if (settings.notifyEnabled) {
+    await chrome.notifications.clear(NOTIFICATION_ID);
+    await notificationClosed(NOTIFICATION_ID);
     await show([{ accountId: 'test', provider: 'gmail', id: 'test', from: { name: 'Unread Mail' }, subject: 'This is how new mail will look' }]);
   }
   if (settings.soundEnabled) await playChime();

@@ -4,7 +4,7 @@
 
 import { providers } from './providers/index.js';
 import { getAccounts, getSettings } from './storage.js';
-import { queueNewMail, testNotification } from './notify.js';
+import { notificationClosed, queueNewMail, testNotification } from './notify.js';
 import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
 
 onNewMail(queueNewMail);
@@ -142,9 +142,13 @@ chrome.action.onClicked.addListener(() => openApp());
 // Notification click: a single email opens in the reader; a group opens the list.
 chrome.notifications.onClicked.addListener(async (id) => {
   const { notificationTarget } = await chrome.storage.session.get('notificationTarget');
-  chrome.notifications.clear(id);
+  await chrome.notifications.clear(id);
+  await notificationClosed(id);
   openApp(notificationTarget);
 });
+
+// Closed by you (or the system): the next new email alerts afresh.
+chrome.notifications.onClosed.addListener((id) => notificationClosed(id));
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
