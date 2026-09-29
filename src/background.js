@@ -4,7 +4,10 @@
 
 import { providers } from './providers/index.js';
 import { getAccounts, getSettings } from './storage.js';
-import { refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
+import { queueNewMail, testNotification } from './notify.js';
+import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
+
+onNewMail(queueNewMail);
 
 const ALARM = 'poll';
 const APP_URL = chrome.runtime.getURL('src/app/app.html');
@@ -117,16 +120,30 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   refreshDue(Math.max(0.5, Number(pollMinutes) || 2), (id) => pushLive.has(id));
 });
 
-// Toolbar click: focus the existing app tab or open one.
-chrome.action.onClicked.addListener(async () => {
+// Focus the existing app tab or open one; `open` names an email to show.
+async function openApp(open) {
+  const hash = open ? `#open=${encodeURIComponent(open)}` : '';
   // getContexts finds our own tab without needing the "tabs" permission.
-  const [tab] = await chrome.runtime.getContexts({ contextTypes: ['TAB'], documentUrls: [APP_URL] });
-  if (tab) {
-    await chrome.tabs.update(tab.tabId, { active: true });
-    await chrome.windows.update(tab.windowId, { focused: true });
+  const tabs = await chrome.runtime.getContexts({ contextTypes: ['TAB'] });
+  const appTab = tabs.find((t) => t.documentUrl?.startsWith(APP_URL));
+  if (appTab) {
+    await chrome.tabs.update(appTab.tabId, { active: true, ...(hash && { url: APP_URL + hash }) });
+    await chrome.windows.update(appTab.windowId, { focused: true });
   } else {
-    await chrome.tabs.create({ url: APP_URL });
+    const win = await chrome.windows.getLastFocused().catch(() => null);
+    await chrome.tabs.create({ url: APP_URL + hash, ...(win && { windowId: win.id }) });
+    if (win) await chrome.windows.update(win.id, { focused: true });
   }
+}
+
+// Toolbar click.
+chrome.action.onClicked.addListener(() => openApp());
+
+// Notification click: a single email opens in the reader; a group opens the list.
+chrome.notifications.onClicked.addListener(async (id) => {
+  const { notificationTarget } = await chrome.storage.session.get('notificationTarget');
+  chrome.notifications.clear(id);
+  openApp(notificationTarget);
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -142,6 +159,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.cmd === 'newMail' && sender.id === chrome.runtime.id && Array.isArray(msg.items)) {
+    queueNewMail(msg.items);
+    return;
+  }
+  if (msg?.cmd === 'testNotification') {
+    testNotification().then(() => sendResponse({ ok: true }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg?.cmd === 'refresh') {
     refreshAll().then(() => sendResponse({ ok: true }), (e) => sendResponse({ ok: false, error: e.message }));
     return true;

@@ -138,6 +138,8 @@ function renderTopbar() {
   $('lastChecked').textContent = lastChecked ? `Checked ${ago(lastChecked)}` : '';
   $('pollMinutes').value = String(state.settings.pollMinutes);
   $('markReadOnOpen').checked = state.settings.markReadOnOpen;
+  $('notifyEnabled').checked = state.settings.notifyEnabled;
+  $('soundEnabled').checked = state.settings.soundEnabled;
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
@@ -975,6 +977,13 @@ $('settingsMenu').addEventListener('click', (e) => e.stopPropagation());
 $('pollMinutes').addEventListener('change', (e) => saveSettings({ pollMinutes: Number(e.target.value) }));
 $('markReadOnOpen').addEventListener('change', (e) => saveSettings({ markReadOnOpen: e.target.checked }));
 $('loadRemoteImages').addEventListener('change', (e) => saveSettings({ loadRemoteImages: e.target.checked }));
+$('notifyEnabled').addEventListener('change', (e) => saveSettings({ notifyEnabled: e.target.checked }));
+$('soundEnabled').addEventListener('change', (e) => saveSettings({ soundEnabled: e.target.checked }));
+$('testNotify').addEventListener('click', async () => {
+  const res = await chrome.runtime.sendMessage({ cmd: 'testNotification' });
+  if (!state.settings.notifyEnabled && !state.settings.soundEnabled) toast('Notifications and sound are both off.');
+  else if (res && !res.ok) toast(res.error, { error: true });
+});
 $('showHidden').addEventListener('change', (e) => saveSettings({ showHidden: e.target.checked }));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMenus());
 
@@ -1005,6 +1014,20 @@ await fillClientIds();
 renderTopbar();
 renderSidebar();
 renderReaderEmpty();
+
+// "#open=<accountId>::<messageId>" (from a notification click) opens that email.
+function openFromHash() {
+  const m = location.hash.match(/^#open=(.+)$/);
+  if (!m) return;
+  const [id, messageId] = splitKey(decodeURIComponent(m[1]));
+  history.replaceState(null, '', location.pathname);
+  if (state.accounts[id]) {
+    setView(null);
+    openMessage(id, messageId);
+  }
+}
+addEventListener('hashchange', openFromHash);
+openFromHash();
 // First run: open Settings so the client IDs can be entered.
 const ids = await getClientIds();
 if (!ids.google && !ids.microsoft) $('settingsMenu').hidden = false;

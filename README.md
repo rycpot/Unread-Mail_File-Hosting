@@ -32,6 +32,7 @@ load the folder unpacked.
 | Proton | Private web-app API on `mail.proton.me/api` with the session's `AUTH-<UID>` cookie, `x-pm-uid` and a current `x-pm-appversion` (from `/assets/version.json`); a declarativeNetRequest rule sets `Origin`/`Referer` to mail.proton.me. Inbox is label `0`, delete moves to Trash (label `3`). An expired session is renewed with the refresh cookie once. Decryption follows Proton's open-source web client: a content script passes on Proton's persisted-session entry (`ps-<localID>` in mail.proton.me's localStorage, AES-GCM encrypted); it is unlocked with the ClientKey the server gives the signed-in session (`auth/v4/sessions/local/key`), yielding the key password that unlocks the user keys; address keys are unlocked via their signed Token. Bodies (HTML, text or PGP/MIME) and attachments (KeyPackets + data) are then OpenPGP-decrypted. Unlocked keys stay in the app tab's memory only. |
 | Sign-in | `chrome.identity.launchWebAuthFlow`, so several accounts per provider are supported. Google uses the token flow; Microsoft uses auth code + PKCE. Renewal is silent: a refresh token (Microsoft), then `prompt=none` + `login_hint`. |
 | Checking | Gmail, Outlook and Proton: a `chrome.alarms` alarm every 30 s to 15 min (Settings); Gmail reuses already-fetched headers, so a check without new mail is 2 requests. iCloud, Yahoo and AOL: **push** — while Chrome runs, the helper keeps one IMAP IDLE connection per account (renewed every 25 min) and reports changes, which are refreshed within about a second; they are only re-checked every 10 min as a safety net, or at ≥ 2 min if push is unavailable. State lives in `chrome.storage.local`. |
+| Notifications | New emails are collected for ~2.5 s (max 6 s) and shown as one Chrome notification: sender + subject with the provider's icon for one email, or "N new emails" with each provider's icon for several. A soft two-note chime (Web Audio, played from an offscreen document) has a 10 s cooldown. An email counts as new only if it was not listed before and arrived after the newest one already seen (IMAP: by UID), and an account's first sync never alerts. Notifications and sound can be turned off separately in Settings. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
 
 ### Files
@@ -39,7 +40,9 @@ load the folder unpacked.
 ```
 manifest.json
 src/background.js        service worker: alarm polling, badge, opens the app tab
-src/sync.js              fetch summaries, record status per account
+src/sync.js              fetch summaries, record status per account, detect new arrivals
+src/notify.js            grouped new-mail notifications and chime
+src/offscreen/           offscreen document that plays the chime
 src/auth.js              OAuth flows and silent token renewal
 src/http.js              authorised fetch with one renew-and-retry on 401
 src/storage.js           chrome.storage.local layout

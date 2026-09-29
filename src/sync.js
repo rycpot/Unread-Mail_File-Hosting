@@ -22,12 +22,59 @@ async function doRefresh(account) {
     // The previous list lets providers skip re-fetching emails they already have.
     const prev = await getMail(account.id);
     const { unreadCount, messages } = await providers[account.provider].fetchSummary(account, prev);
-    await patchMail(account.id, { status: 'ok', error: null, unreadCount, messages, lastCheckedAt: now, lastSuccessAt: now });
+    const { fresh, mark } = newArrivals(account, prev, messages);
+    await patchMail(account.id, { status: 'ok', error: null, unreadCount, messages, mark, lastCheckedAt: now, lastSuccessAt: now });
+    if (fresh.length) {
+      reportNewMail(fresh.map((m) => ({ accountId: account.id, provider: account.provider, id: m.id, from: m.from, subject: m.subject })));
+    }
   } catch (e) {
     const status = e instanceof AuthRequiredError ? 'auth' : 'error';
     console.warn(`[sync] ${account.id} failed:`, e);
     await patchMail(account.id, { status, error: e.message, lastCheckedAt: now });
   }
+}
+
+// ---------- new-mail detection (for notifications) ----------
+//
+// An email is "new" only if it was not listed before AND arrived after the
+// newest email already seen for the account (the "mark"). This ignores older
+// unread emails that slide into the 30-item list when one is marked read, and
+// emails marked unread again. For IMAP, arrival order is the server's UID
+// (always increasing), not the sender-controlled Date header; for the others
+// it is the server's receipt time. An account's first sync never notifies.
+
+function arrivalOf(account, msg) {
+  if (providers[account.provider]?.kind === 'imap') {
+    const [epoch, uid] = String(msg.id).split('-'); // "<uidvalidity>-<uid>"
+    return { epoch, value: Number(uid) || 0 };
+  }
+  return { epoch: '', value: Number(msg.date) || 0 };
+}
+
+function newArrivals(account, prev, messages) {
+  const arrivals = messages.map((m) => ({ m, a: arrivalOf(account, m) }));
+  const top = (list) => list.reduce((best, x) => (!best || x.a.value > best.value ? x.a : best), null);
+  const current = top(arrivals);
+  let mark = prev?.mark ?? top((prev?.messages ?? []).map((m) => ({ a: arrivalOf(account, m) })));
+  // First sync, or the mailbox was rebuilt (new UIDVALIDITY): just set the mark.
+  if (!prev?.lastSuccessAt || !mark || (current && current.epoch !== mark.epoch)) {
+    return { fresh: [], mark: current ?? mark ?? null };
+  }
+  const listed = new Set((prev.messages ?? []).map((m) => m.id));
+  const fresh = arrivals.filter(({ m, a }) => !listed.has(m.id) && a.value > mark.value).map(({ m }) => m);
+  if (current && current.value > mark.value) mark = current;
+  return { fresh, mark };
+}
+
+// Notifications are handled by the background service worker; a refresh run
+// from the app tab hands its new emails over to it.
+let newMailHandler = null;
+export function onNewMail(handler) {
+  newMailHandler = handler;
+}
+function reportNewMail(items) {
+  if (newMailHandler) newMailHandler(items);
+  else chrome.runtime.sendMessage({ cmd: 'newMail', items }).catch(() => {});
 }
 
 export async function refreshAll() {

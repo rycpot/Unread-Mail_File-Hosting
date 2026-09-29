@@ -174,6 +174,14 @@ repository), and remove the account with **⋯ → Remove account** if you stop 
 If you sign out of Proton, the account shows *Signed out*; sign in at
 mail.proton.me again and click **Sign in** in the app.
 
+## 7. Notifications
+
+**Settings → Notifications for new mail** and **Notification sound** can be switched
+independently; **Test** shows a sample notification and plays the chime.
+
+On macOS, Chrome's notifications also need to be allowed in **System Settings →
+Notifications → Google Chrome** (banner style "Temporary" or "Persistent").
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -181,6 +189,7 @@ mail.proton.me again and click **Sign in** in the app.
 | "The IMAP helper is not installed" | Run `helper/install.sh` (section 5), then reload the extension. |
 | iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
 | Proton shows "request failed" after a Proton update | Open mail.proton.me once, then **Refresh**; the extension re-reads Proton's current app version. If it persists, report the error text. |
+| No notification appears | Check Settings → Notifications for new mail, then macOS System Settings → Notifications → Google Chrome, and that Focus / Do Not Disturb is off. |
 | "client ID is not set" | Enter the IDs under the gear icon → OAuth client IDs (step 3). |
 | `redirect_uri_mismatch` (Google) | The redirect URI in step 1.6 must match exactly, with the trailing `/`. |
 | "Gmail access was not granted" | On the consent screen, tick the Gmail permission checkbox. |

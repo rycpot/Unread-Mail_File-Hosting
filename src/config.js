@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS = {
   markReadOnOpen: true,
   loadRemoteImages: false,
   showHidden: false,
+  notifyEnabled: true,
+  soundEnabled: true,
 };
 
 // How many unread messages to keep per account in the sidebar.
