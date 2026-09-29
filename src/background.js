@@ -13,14 +13,26 @@ async function schedule() {
   await chrome.alarms.create(ALARM, { periodInMinutes: Math.max(1, Number(pollMinutes) || 2) });
 }
 
+// Content scripts only reach pages loaded after the extension was installed
+// or updated, so add the Proton session script to mail.proton.me tabs that
+// are already open.
+async function injectIntoOpenProtonTabs() {
+  const tabs = await chrome.tabs.query({ url: 'https://mail.proton.me/*' });
+  for (const tab of tabs) {
+    chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['src/content/proton-session.js'] }).catch(() => {});
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   schedule();
   refreshAll();
+  injectIntoOpenProtonTabs();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   schedule();
   refreshAll();
+  injectIntoOpenProtonTabs();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {

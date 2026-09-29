@@ -158,6 +158,32 @@ async function call(account, path, opts) {
   }
 }
 
+// Asks any open mail.proton.me tab to pass on its session entry now. Returns
+// whether there was a tab to ask.
+async function pickUpFromOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: 'https://mail.proton.me/*' });
+  if (!tabs.length) return false;
+  await Promise.all(tabs.map((t) => chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['src/content/proton-session.js'] }).catch(() => {})));
+  await new Promise((r) => setTimeout(r, 1500));
+  return true;
+}
+
+// The saved session entry is keyed by session UID. If none matches this
+// account's UID (for example the entry came from another signed-in session of
+// the same account), use a stored session that belongs to the same address.
+async function matchSessionEntry(account) {
+  const { protonSessions = {} } = await chrome.storage.local.get('protonSessions');
+  if (protonSessions[account.uid]) return;
+  for (const uid of Object.keys(protonSessions)) {
+    try {
+      if ((await whoAmI(uid)) === account.email.toLowerCase()) {
+        await updateUid(account, uid);
+        return;
+      }
+    } catch {}
+  }
+}
+
 async function updateUid(account, uid) {
   account.uid = uid;
   const { accounts = {} } = await chrome.storage.local.get('accounts');
@@ -235,9 +261,18 @@ export const proton = {
       numAttachments: m.NumAttachments ?? 0,
       webUrl: `${ORIGIN}/u/${localID}/inbox/${encodeURIComponent(m.ID)}`,
     };
-    try {
+    const decrypt = async () => {
+      await matchSessionEntry(account);
       const keys = await getAddressKeys(account, (path, opts) => call(account, path, opts));
       return { ...base, ...(await decryptMessage(m, keys)) };
+    };
+    try {
+      try {
+        return await decrypt();
+      } catch (e) {
+        if (!(e instanceof ProtonSessionMissing) || !(await pickUpFromOpenTabs())) throw e;
+        return await decrypt();
+      }
     } catch (e) {
       console.warn('[proton] decryption failed:', e);
       return {

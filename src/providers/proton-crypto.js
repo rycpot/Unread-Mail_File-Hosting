@@ -22,8 +22,8 @@ import PostalMime from '../vendor/postal-mime/postal-mime.js';
 const PGP_CONFIG = { allowInsecureDecryptionWithSigningKeys: true };
 
 export class ProtonSessionMissing extends Error {
-  constructor() {
-    super('Open mail.proton.me once in this Chrome profile (signed in, with "Keep me signed in" on) so the extension can pick up your Proton session, then try again.');
+  constructor(captured = 0) {
+    super(`Open (or reload) mail.proton.me in this Chrome profile, signed in with "Keep me signed in" on, so the extension can pick up your Proton session, then try again. (Session entries picked up so far: ${captured}.)`);
     this.name = 'ProtonSessionMissing';
   }
 }
@@ -99,7 +99,7 @@ async function loadAddressKeys(account, api) {
   const { ClientKey } = await api('auth/v4/sessions/local/key');
   const { protonSessions = {} } = await chrome.storage.local.get('protonSessions');
   const session = protonSessions[account.uid];
-  if (!session?.blob) throw new ProtonSessionMissing();
+  if (!session?.blob) throw new ProtonSessionMissing(Object.keys(protonSessions).length);
   const keyPassword = await decryptSessionBlob(ClientKey, session.blob, session.payloadVersion);
 
   const [{ User }, { Addresses }] = await Promise.all([api('core/v4/users'), api('core/v4/addresses')]);

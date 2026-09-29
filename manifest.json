@@ -17,7 +17,8 @@
     "alarms",
     "nativeMessaging",
     "cookies",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "scripting"
   ],
   "host_permissions": [
     "https://gmail.googleapis.com/*",
