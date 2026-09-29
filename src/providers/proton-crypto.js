@@ -103,12 +103,17 @@ async function loadAddressKeys(account, api) {
   const keyPassword = await decryptSessionBlob(ClientKey, session.blob, session.payloadVersion);
 
   const [{ User }, { Addresses }] = await Promise.all([api('core/v4/users'), api('core/v4/addresses')]);
+  // Accounts often keep older keys (for example from before a password reset)
+  // that the current key password cannot unlock; Proton marks them inactive
+  // and skips them, and so do we. Only the counts are logged.
+  const isActive = (k) => k.Active !== 0;
+  let skipped = 0;
   const userPrivate = [];
-  for (const k of User?.Keys ?? []) {
+  for (const k of (User?.Keys ?? []).filter(isActive)) {
     try {
       userPrivate.push(await unlock(k.PrivateKey, keyPassword));
-    } catch (e) {
-      console.warn('[proton] user key not unlocked', k.ID, e.message);
+    } catch {
+      skipped++;
     }
   }
   if (!userPrivate.length) throw new Error('Could not unlock your Proton keys with this session');
@@ -116,16 +121,17 @@ async function loadAddressKeys(account, api) {
 
   const addressKeys = [];
   for (const address of Addresses ?? []) {
-    for (const k of address.Keys ?? []) {
+    for (const k of (address.Keys ?? []).filter(isActive)) {
       try {
         const passphrase = await addressKeyPassword(k, userPrivate, userPublic, keyPassword);
         addressKeys.push(await unlock(k.PrivateKey, passphrase));
-      } catch (e) {
-        console.warn('[proton] address key not unlocked', address.Email, k.ID, e.message);
+      } catch {
+        skipped++;
       }
     }
   }
   if (!addressKeys.length) throw new Error('Could not unlock any Proton address key');
+  if (skipped) console.debug(`[proton] ${skipped} older key(s) could not be unlocked and were skipped`);
   return addressKeys;
 }
 
