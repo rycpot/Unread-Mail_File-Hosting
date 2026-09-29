@@ -76,6 +76,18 @@
     </form>
   </dialog>
 
+  <dialog class="dialog" id="sessionDialog" aria-labelledby="sessionTitle">
+    <form method="dialog">
+      <h2 id="sessionTitle">Sign in to Proton</h2>
+      <p class="dialog-help" id="sessionText"></p>
+      <div class="dialog-actions">
+        <button type="button" class="tool-btn" id="sessionCancel">Cancel</button>
+        <button type="button" class="tool-btn" id="sessionOpen">Open Proton Mail</button>
+        <button type="button" class="tool-btn primary" id="sessionRetry">I've signed in</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

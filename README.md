@@ -7,7 +7,9 @@ Trash or Deleted Items), without opening the webmail site.
 - **Gmail** via the Gmail API and **Outlook/Hotmail** via Microsoft Graph.
 - **iCloud, Yahoo and AOL** via IMAP, through a small local helper (Chrome
   native messaging) with app-specific passwords kept in the macOS Keychain.
-- **Proton** (free plan, session based) is planned.
+- **Proton** (free plan) through the mail.proton.me session signed in in Chrome:
+  unread list, mark read/unread, delete and Recently read. Bodies are end-to-end
+  encrypted, so opening one offers **Open in Proton**.
 
 Any number of accounts per provider.
 
@@ -60,6 +62,7 @@ load the folder unpacked.
 | Gmail | Scope `gmail.modify`. The unread count comes from `labels/INBOX`. The list is `INBOX` + `UNREAD` messages. Delete means `messages.trash`. |
 | Outlook | Scope `Mail.ReadWrite`. The unread count comes from `mailFolders/inbox`. Delete moves the message to `deleteditems`. |
 | iCloud / Yahoo / AOL | IMAP via `helper/unread_mail_imap.py`. Listing uses `EXAMINE` (read-only) and `SEARCH UNSEEN`, fetching only From/Subject/Date of the newest 30; bodies use `BODY.PEEK[]` on click; delete is `UID MOVE` to the Trash folder. |
+| Proton | Private web-app API on `mail.proton.me/api` with the session's `AUTH-<UID>` cookie, `x-pm-uid` and a current `x-pm-appversion` (from `/assets/version.json`); a declarativeNetRequest rule sets `Origin`/`Referer` to mail.proton.me. Inbox is label `0`, delete moves to Trash (label `3`). An expired session is renewed with the refresh cookie once. |
 | Sign-in | `chrome.identity.launchWebAuthFlow`, so several accounts per provider are supported. Google uses the token flow; Microsoft uses auth code + PKCE. Renewal is silent: a refresh token (Microsoft), then `prompt=none` + `login_hint`. |
 | Polling | A `chrome.alarms` alarm, every 1 to 15 minutes (set in Settings). State lives in `chrome.storage.local`. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
@@ -76,6 +79,7 @@ src/storage.js           chrome.storage.local layout
 src/providers/gmail.js   Gmail API adapter
 src/providers/outlook.js Microsoft Graph adapter
 src/providers/imap.js    iCloud / Yahoo / AOL adapter (talks to the helper)
+src/providers/proton.js  Proton adapter (signed-in web session)
 src/native.js            native messaging client for the helper
 helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
@@ -84,5 +88,4 @@ icons/providers/         provider icons used in the rail and list
 ```
 
 Each provider adapter implements `identify`, `fetchSummary`, `getMessage`,
-`getAttachment`, `setRead` and `trash`. The session-based providers in phase 2
-will implement the same interface.
+`getAttachment`, `setRead` and `trash`.

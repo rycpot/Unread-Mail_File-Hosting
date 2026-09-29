@@ -142,12 +142,29 @@ the app password, **Connect**. The helper signs in once to check it, then saves
 the password in the macOS **Keychain** (item `unread-mail-imap`). The extension
 itself never stores it. **Remove account** deletes the Keychain item too.
 
+## 6. Proton (free plan)
+
+Proton's free plan has no IMAP, so the extension uses the Proton session you are
+signed in to in this Chrome profile.
+
+1. Sign in at <https://mail.proton.me> in Chrome, with **Keep me signed in** on.
+2. In the app: **+ → Proton**. Every Proton account signed in there is added.
+
+What works: unread count and list, mark read/unread (one, several or all), delete
+(moves to Trash) and Recently read. Email **bodies are end-to-end encrypted**, so
+opening one shows its sender, recipients and date with an **Open in Proton**
+button; it is not marked read just by opening it here.
+
+If you sign out of Proton, the account shows *Signed out*; sign in at
+mail.proton.me again and click **Sign in** in the app.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | "The IMAP helper is not installed" | Run `helper/install.sh` (section 5), then reload the extension. |
 | iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
+| Proton shows "request failed" after a Proton update | Open mail.proton.me once, then **Refresh**; the extension re-reads Proton's current app version. If it persists, report the error text. |
 | "client ID is not set" | Enter the IDs under the gear icon → OAuth client IDs (step 3). |
 | `redirect_uri_mismatch` (Google) | The redirect URI in step 1.6 must match exactly, with the trailing `/`. |
 | "Gmail access was not granted" | On the consent screen, tick the Gmail permission checkbox. |

@@ -24,6 +24,7 @@ const icon = {
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
   login: svg('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>'),
   remove: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>'),
+  lock: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
   clip: svg('<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'),
 };
 
@@ -285,8 +286,9 @@ function renderNotices(accounts) {
 }
 
 function renderSidebar() {
+  // An account view whose account is gone (or not loaded yet) falls back to its provider.
+  if (state.view.account && !state.accounts[state.view.account]) state.view = { ...state.view, account: null };
   const { provider, account } = state.view;
-  if (account && !state.accounts[account]) state.view = { provider, account: null };
   const accounts = viewAccounts();
   const messages = viewMessages();
   state.visibleList = messages;
@@ -518,6 +520,7 @@ function closeMenus() {
 async function addAccount(providerId, loginHint) {
   const provider = providers[providerId];
   if (provider.kind === 'imap') return openImapDialog(provider, loginHint);
+  if (provider.kind === 'session') return connectSession(provider, loginHint);
   try {
     const token = await signIn(providerId, loginHint);
     const { email } = await provider.identify(token);
@@ -529,6 +532,7 @@ async function addAccount(providerId, loginHint) {
     } else {
       toast(`${email} connected`);
     }
+    await load();
     setView(providerId, id);
     await refreshOne(id);
   } catch (e) {
@@ -569,6 +573,7 @@ async function submitImapDialog(e) {
     await upsertAccount({ id, provider: provider.id, email, hidden: false, addedAt: Date.now() });
     $('imapDialog').close();
     toast(`${email} connected`);
+    await load();
     setView(provider.id, id);
     await refreshOne(id);
   } catch (err) {
@@ -580,6 +585,42 @@ async function submitImapDialog(e) {
     button.disabled = false;
     button.textContent = 'Connect';
   }
+}
+
+// ---------- session accounts (Proton) ----------
+
+let sessionTarget = null;
+
+// Adds every account signed in on the provider's website in this Chrome
+// profile, or (with an email) reconnects that one account.
+async function connectSession(provider, email) {
+  sessionTarget = { provider, email };
+  let found;
+  try {
+    found = await provider.discover();
+  } catch (e) {
+    toast(e.message, { error: true });
+    return;
+  }
+  const wanted = email ? found.filter((f) => f.email === email.toLowerCase()) : found;
+  if (!wanted.length) {
+    $('sessionTitle').textContent = `Sign in to ${provider.name}`;
+    $('sessionText').textContent = email
+      ? `${email} is not signed in to ${provider.name} in this Chrome profile. Sign in at mail.proton.me (keep "Keep me signed in" on), then come back and click "I've signed in".`
+      : `No ${provider.name} account is signed in in this Chrome profile. Sign in at mail.proton.me (keep "Keep me signed in" on), then come back and click "I've signed in".`;
+    if (!$('sessionDialog').open) $('sessionDialog').showModal();
+    return;
+  }
+  if ($('sessionDialog').open) $('sessionDialog').close();
+  let last;
+  for (const f of wanted) {
+    last = accountId(provider.id, f.email);
+    await upsertAccount({ id: last, provider: provider.id, email: f.email, uid: f.uid, hidden: false, addedAt: Date.now() });
+  }
+  toast(`${wanted.map((f) => f.email).join(', ')} connected`);
+  await load();
+  setView(provider.id, wanted.length === 1 ? last : null);
+  for (const f of wanted) await refreshOne(accountId(provider.id, f.email));
 }
 
 async function refreshOne(id) {
@@ -702,7 +743,9 @@ async function openMessage(id, messageId) {
     if (seq !== openSeq) return;
     state.message = msg;
     renderReader();
-    if (state.settings.markReadOnOpen && !msg.isRead) {
+    // An encrypted (Proton) body is not shown here, so opening it does not
+    // count as reading it.
+    if (state.settings.markReadOnOpen && !msg.isRead && !msg.encrypted) {
       setRead(id, messageId, true).catch((e) => toast(`Couldn't mark as read: ${e.message}`, { error: true }));
     }
   } catch (e) {
@@ -736,7 +779,9 @@ async function loadInlineImages(provider, account, msg) {
 function renderReader() {
   const msg = state.message;
   const allowRemote = state.settings.loadRemoteImages || state.showRemoteImages;
-  const { srcdoc, remoteImages } = buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineImages: msg.inlineImages });
+  const { srcdoc, remoteImages } = msg.encrypted
+    ? { srcdoc: '', remoteImages: 0 }
+    : buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineImages: msg.inlineImages });
   const files = msg.attachments.filter((x) => !x.inline);
   const rcpt = (label, list) =>
     list.length ? `<div class="meta-rcpt" title="${esc(list.map((r) => r.email).join(', '))}">${label} ${esc(list.map(displayName).join(', '))}</div>` : '';
@@ -758,8 +803,13 @@ function renderReader() {
       <button class="link-btn" data-action="show-images">Show images</button>
       <button class="link-btn" data-action="always-images">Always show</button></div>` : ''}
     ${files.length ? `<div class="attachments">${files.map((f) => `<button class="attachment" data-action="download" data-index="${msg.attachments.indexOf(f)}" title="${esc(f.filename)}">${icon.clip}<span class="name">${esc(f.filename)}</span><span class="size">${formatSize(f.size)}</span></button>`).join('')}</div>` : ''}
-    <iframe class="body-frame" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Email body"></iframe>`;
-  reader.querySelector('iframe').srcdoc = srcdoc;
+    ${msg.encrypted
+      ? `<div class="encrypted-note">${icon.lock}
+          <p><strong>This email is end-to-end encrypted by Proton.</strong><br>
+          Its content can only be decrypted in Proton Mail${msg.numAttachments ? ` (${msg.numAttachments} attachment${msg.numAttachments > 1 ? 's' : ''})` : ''}.</p>
+          <button class="tool-btn primary" data-action="open-web">${icon.external}Open in Proton</button></div>`
+      : '<iframe class="body-frame" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Email body"></iframe>'}`;
+  if (!msg.encrypted) reader.querySelector('iframe').srcdoc = srcdoc;
   renderReaderToolbar();
 }
 
@@ -915,6 +965,9 @@ async function fillClientIds() {
   $('microsoftClientId').value = ids.microsoft;
 }
 $('imapForm').addEventListener('submit', submitImapDialog);
+$('sessionCancel').addEventListener('click', () => $('sessionDialog').close());
+$('sessionOpen').addEventListener('click', () => chrome.tabs.create({ url: sessionTarget.provider.signInUrl }));
+$('sessionRetry').addEventListener('click', () => connectSession(sessionTarget.provider, sessionTarget.email));
 $('imapCancel').addEventListener('click', () => $('imapDialog').close());
 $('clientIdsForm').addEventListener('submit', async (e) => {
   e.preventDefault();
