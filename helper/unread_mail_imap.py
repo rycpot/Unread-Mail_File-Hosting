@@ -552,12 +552,12 @@ def cmd_trash(req):
 
 
 def cmd_spam_list(req):
-    """The newest emails in the spam folder, read or not."""
+    """The newest unread emails in the spam folder."""
     limit = int(req.get('limit', 20))
     conn = connect(req['provider'], req['email'])
     try:
         uidvalidity = select_folder(conn, find_junk(conn), readonly=True)
-        uids = search(conn, 'ALL')
+        uids = search(conn, 'UNSEEN')
         return {'messages': fetch_headers(conn, sorted(uids)[-limit:], uidvalidity)}
     finally:
         _logout(conn)

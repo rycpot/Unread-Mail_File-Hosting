@@ -35,9 +35,9 @@ export const gmail = {
     return { unreadCount: label.messagesUnread ?? 0, spamUnread: spam?.messagesUnread ?? 0, messages };
   },
 
-  // The newest emails in Spam, read or not, fetched only when asked for.
+  // The newest unread emails in Spam, fetched only when asked for.
   async fetchSpam(account, limit) {
-    const list = await apiFetch(account, `${API}/messages?labelIds=SPAM&maxResults=${limit}`);
+    const list = await apiFetch(account, `${API}/messages?labelIds=SPAM&labelIds=UNREAD&maxResults=${limit}`);
     return headers(account, list.messages ?? []);
   },
 

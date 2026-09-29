@@ -46,10 +46,11 @@ const state = {
   lastPicked: null, // key of the last ticked email, anchor for shift-click ranges
   allUnread: false, // "select all N unread" beyond the listed emails
   progress: null, // "Marking 120 of 812…" while a bulk action runs
-  recentOpen: new Set(), // accounts whose "Recently read" section is expanded
-  recent: new Map(), // accountId -> { loading, messages, error }
-  spamOpen: new Set(), // accounts whose "Spam" section is expanded
-  spam: new Map(), // accountId -> { loading, messages, error }
+  // "Recently read" and "Spam" sections, keyed by account id, or "*" for the
+  // combined ones under All accounts: which are expanded, and what they list
+  // ({ loading, messages: [{ accountId, id, … }], error }).
+  open: { recent: new Set(), spam: new Set() },
+  sections: { recent: new Map(), spam: new Map() },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -184,7 +185,7 @@ function setView(provider, account = null) {
   state.allUnread = false;
   saveView();
   renderSidebar();
-  if (account && state.recentOpen.has(account)) loadRecent(account);
+  reloadOpenSections();
 }
 
 // "New" dots: ids not yet seen when the tab was last left. Everything present
@@ -383,7 +384,7 @@ function renderSidebar() {
       ${head}
       ${rows ? `<ul class="messages">${rows}</ul>` : ''}
       ${more}${empty}
-      ${account ? renderRecent(state.accounts[account]) + renderSpam(state.accounts[account]) : ''}
+      ${sectionKey() ? renderSection('recent', sectionKey()) + renderSection('spam', sectionKey()) : ''}
       ${footer}
     </div>`;
   sidebar.querySelector('.pane').scrollTop = scroll;
@@ -391,81 +392,104 @@ function renderSidebar() {
   if (all) all.indeterminate = selecting && !allListed;
 }
 
-// "Recently read": the last few read inbox emails of one account, collapsed by
-// default and fetched only when opened.
+// "Recently read" (the last few read inbox emails) and "Spam" (unread spam
+// only) sections, collapsed by default and fetched only when opened. They are
+// shown for one account in its view, and combined for all visible accounts
+// under All accounts (key "*"). The spam count comes from the regular checks.
 const RECENT_LIMIT = 10;
+const SPAM_LIMIT = 20;
+const SECTION = {
+  recent: { title: 'Recently read', empty: 'No read emails in the inbox.', fetch: (p, a) => p.fetchRecentRead(a, RECENT_LIMIT), limit: RECENT_LIMIT },
+  spam: { title: 'Spam', empty: 'No unread spam.', fetch: (p, a) => p.fetchSpam(a, SPAM_LIMIT), folder: 'spam' },
+};
+
+// The section key for the current view: the account, "*" under All
+// accounts, none in a provider's all-accounts view.
+const sectionKey = () => state.view.account ?? (state.view.provider ? null : '*');
+const sectionAccounts = (key) =>
+  key === '*' ? liveAccounts().filter((a) => !a.hidden) : [state.accounts[key]].filter(Boolean);
 
 const isSelected = (accountId, messageId, folder) =>
   state.selected?.accountId === accountId && state.selected?.messageId === messageId && state.selected?.folder === folder;
 
-// Rows of a collapsible section ("Recently read", "Spam") of one account.
-function sectionRows(a, r, emptyText, folder) {
+function sectionRows(kind, key) {
+  const r = state.sections[kind].get(key);
+  const { folder, empty } = SECTION[kind];
   if (!r || r.loading) return '<li class="recent-note">Loading…</li>';
-  if (r.error) return `<li class="recent-note error">${esc(r.error)}</li>`;
-  if (!r.messages.length) return `<li class="recent-note">${emptyText}</li>`;
-  return r.messages.map((msg) => `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(a.id, msg.id, folder) ? ' selected' : ''}"><span class="lead"></span>
-      <button class="msg" data-action="open" data-account="${esc(a.id)}" data-message="${esc(msg.id)}"${folder ? ` data-folder="${folder}"` : ''}>
+  const notes = (r.errors ?? []).map((e) => `<li class="recent-note error">${esc(e)}</li>`).join('');
+  if (!r.messages.length) return notes || `<li class="recent-note">${empty}</li>`;
+  const combined = key === '*';
+  return r.messages.map((msg) => {
+    const acct = state.accounts[msg.accountId];
+    return `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(msg.accountId, msg.id, folder) ? ' selected' : ''}">
+      <span class="lead">${combined ? pico(acct?.provider) : ''}</span>
+      <button class="msg" data-action="open" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}" data-list="${esc(key)}"${folder ? ` data-folder="${folder}"` : ''}>
         <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
         <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
-      </button></li>`).join('');
+        ${combined ? `<span class="msg-acct">${esc(acct?.email ?? '')}</span>` : ''}
+      </button></li>`;
+  }).join('') + notes;
 }
 
-function renderRecent(a) {
-  const open = state.recentOpen.has(a.id);
+function renderSection(kind, key) {
+  const accounts = sectionAccounts(key);
+  if (!accounts.length) return '';
+  const open = state.open[kind].has(key);
+  const count = kind === 'spam' ? accounts.reduce((n, a) => n + (state.mail[a.id]?.spamUnread ?? 0), 0) : 0;
   return `<div class="recent-block">
-    <button class="recent-toggle" data-action="toggle-recent" data-account="${esc(a.id)}" aria-expanded="${open}">
-      ${icon.chevron.replace('<svg', '<svg class="chevron"')}Recently read
+    <button class="recent-toggle" data-action="toggle-section" data-kind="${kind}" data-key="${esc(key)}" aria-expanded="${open}">
+      ${icon.chevron.replace('<svg', '<svg class="chevron"')}${SECTION[kind].title}${count ? `<span class="spam-count" title="${count} unread in spam">${count}</span>` : ''}
     </button>
-    ${open ? `<ul class="messages recent-list">${sectionRows(a, state.recent.get(a.id), 'No read emails in the inbox.')}</ul>` : ''}
+    ${open ? `<ul class="messages recent-list">${sectionRows(kind, key)}</ul>` : ''}
   </div>`;
 }
 
-// "Spam": the newest emails in the account's spam folder, collapsed by
-// default and fetched only when opened. Its unread count is kept up to date
-// by the regular checks and shown only here.
-const SPAM_LIMIT = 20;
-
-function renderSpam(a) {
-  if (!providers[a.provider].fetchSpam) return '';
-  const open = state.spamOpen.has(a.id);
-  const unread = state.mail[a.id]?.spamUnread ?? 0;
-  return `<div class="recent-block">
-    <button class="recent-toggle" data-action="toggle-spam" data-account="${esc(a.id)}" aria-expanded="${open}">
-      ${icon.chevron.replace('<svg', '<svg class="chevron"')}Spam${unread ? `<span class="spam-count" title="${unread} unread in spam">${unread}</span>` : ''}
-    </button>
-    ${open ? `<ul class="messages recent-list">${sectionRows(a, state.spam.get(a.id), 'No spam.', 'spam')}</ul>` : ''}
-  </div>`;
-}
-
-async function loadSpam(id) {
-  const a = state.accounts[id];
-  state.spam.set(id, { loading: true, messages: [] });
+async function loadSection(kind, key) {
+  const accounts = sectionAccounts(key);
+  state.sections[kind].set(key, { loading: true, messages: [] });
   renderSidebar();
-  try {
-    state.spam.set(id, { messages: await providers[a.provider].fetchSpam(a, SPAM_LIMIT) });
-  } catch (e) {
-    state.spam.set(id, { messages: [], error: e.name === 'AuthRequiredError' ? 'Sign in again to load spam.' : e.message });
+  const results = await Promise.allSettled(accounts.map(async (a) =>
+    (await SECTION[kind].fetch(providers[a.provider], a)).map((m) => ({ ...m, accountId: a.id }))));
+  const messages = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])).sort((x, y) => y.date - x.date);
+  const errors = results.flatMap((r, i) => {
+    if (r.status === 'fulfilled') return [];
+    const why = r.reason?.name === 'AuthRequiredError' ? 'sign in again' : r.reason?.message;
+    return [accounts.length > 1 ? `${accounts[i].email}: ${why}` : why];
+  });
+  state.sections[kind].set(key, { messages: SECTION[kind].limit ? messages.slice(0, SECTION[kind].limit) : messages, errors });
+  renderSidebar();
+}
+
+function reloadOpenSections() {
+  const key = sectionKey();
+  if (!key) return;
+  for (const kind of ['recent', 'spam']) if (state.open[kind].has(key)) loadSection(kind, key);
+}
+
+// Every listed copy of an email in the sections of one kind (it can be in an
+// account's section and the combined one).
+function sectionItems(kind, accountId, messageId) {
+  return [...state.sections[kind].values()].flatMap((r) => r.messages ?? [])
+    .filter((m) => m.accountId === accountId && m.id === messageId);
+}
+
+function dropFromSections(kind, accountId, messageId) {
+  for (const r of state.sections[kind].values()) {
+    if (r.messages) r.messages = r.messages.filter((m) => !(m.accountId === accountId && m.id === messageId));
   }
-  renderSidebar();
+}
+
+// The email after (or before) this one in the section list it was opened from.
+function sectionNeighbour(kind, accountId, messageId) {
+  const list = state.sections[kind].get(state.selected?.list ?? accountId)?.messages ?? [];
+  const idx = list.findIndex((m) => m.accountId === accountId && m.id === messageId);
+  return idx === -1 ? null : list[idx + 1] ?? list[idx - 1] ?? null;
 }
 
 // Keeps the Spam count in step after reading, deleting or rescuing a spam email.
 async function adjustSpamUnread(id, delta) {
   const m = await getMail(id);
   if (m && delta) await patchMail(id, { spamUnread: Math.max(0, (m.spamUnread ?? 0) + delta) });
-}
-
-async function loadRecent(id) {
-  const a = state.accounts[id];
-  state.recent.set(id, { loading: true, messages: [] });
-  renderSidebar();
-  try {
-    const messages = await providers[a.provider].fetchRecentRead(a, RECENT_LIMIT);
-    state.recent.set(id, { messages });
-  } catch (e) {
-    state.recent.set(id, { messages: [], error: e.name === 'AuthRequiredError' ? 'Sign in again to load read emails.' : e.message });
-  }
-  renderSidebar();
 }
 
 function toggleChecked(key, on, { range = false } = {}) {
@@ -777,10 +801,10 @@ async function refreshAllFromUi() {
     // A manual refresh also closes an email that is no longer in the list
     // (read or deleted elsewhere); automatic checks never do.
     const sel = state.selected;
-    const recent = sel && state.recent.get(sel.accountId);
+    const kind = sel?.folder === 'spam' ? 'spam' : 'recent';
     const listed = sel && (state.visibleList.some((m) => m.accountId === sel.accountId && m.id === sel.messageId)
-      || (state.view.account === sel.accountId && state.recentOpen.has(sel.accountId)
-        && recent?.messages?.some((m) => m.id === sel.messageId)));
+      || (sel.list === sectionKey() && state.open[kind].has(sel.list)
+        && sectionItems(kind, sel.accountId, sel.messageId).length > 0));
     if (sel && !listed) {
       openSeq++; // drop any load still in flight for it
       state.selected = null;
@@ -788,7 +812,7 @@ async function refreshAllFromUi() {
       renderReaderEmpty();
       renderSidebar();
     }
-    for (const id of state.recentOpen) loadRecent(id);
+    reloadOpenSections();
   } finally {
     btn.classList.remove('spinning');
   }
@@ -812,11 +836,9 @@ async function setRead(id, messageId, read, folder) {
   const a = state.accounts[id];
   await providers[a.provider].setRead(a, messageId, read, { folder });
   if (folder === 'spam') {
-    const item = state.spam.get(id)?.messages?.find((m) => m.id === messageId);
-    if (item && item.read !== read) {
-      item.read = read;
-      await adjustSpamUnread(id, read ? -1 : 1);
-    }
+    const items = sectionItems('spam', id, messageId);
+    if (items.length && items[0].read !== read) await adjustSpamUnread(id, read ? -1 : 1);
+    for (const item of items) item.read = read;
     if (state.message?.id === messageId) {
       state.message.isRead = read;
       renderReaderToolbar();
@@ -833,9 +855,8 @@ async function setRead(id, messageId, read, folder) {
     renderReaderToolbar();
   }
   // A "Recently read" email marked unread moves back to the unread list.
-  const recent = state.recent.get(id);
-  if (!read && recent?.messages?.some((m) => m.id === messageId)) {
-    recent.messages = recent.messages.filter((m) => m.id !== messageId);
+  if (!read && sectionItems('recent', id, messageId).length) {
+    dropFromSections('recent', id, messageId);
     renderSidebar();
     refreshOne(id);
   }
@@ -852,17 +873,18 @@ async function trashMessage(id, messageId, folder) {
   // The email may be in the unread list, in "Recently read", or both (an
   // unread email that was just opened). Move on to its neighbour in the list
   // it was opened from.
-  const recent = state.recent.get(id);
   const key = keyOf(id, messageId);
-  const inList = state.visibleList.some((m) => m.key === key);
-  const list = inList ? state.visibleList : (recent?.messages ?? []).map((m) => ({ ...m, accountId: id }));
-  const idx = list.findIndex((m) => m.accountId === id && m.id === messageId);
-  const next = idx === -1 ? null : list[idx + 1] ?? list[idx - 1];
+  let next;
+  if (state.selected?.list === undefined || state.visibleList.some((m) => m.key === key)) {
+    const idx = state.visibleList.findIndex((m) => m.key === key);
+    next = idx === -1 ? null : state.visibleList[idx + 1] ?? state.visibleList[idx - 1];
+  } else next = sectionNeighbour('recent', id, messageId);
+  const list = state.selected?.list;
   await providers[a.provider].trash(a, messageId);
-  if (recent) recent.messages = recent.messages.filter((m) => m.id !== messageId);
+  dropFromSections('recent', id, messageId);
   await updateCachedMessage(id, messageId, (msg) => ({ message: null, unreadDelta: msg.read ? 0 : -1 }));
   toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
-  if (next) openMessage(next.accountId, next.id);
+  if (next) openMessage(next.accountId, next.id, { list: state.visibleList.includes(next) ? undefined : list });
   else closeReader();
 }
 
@@ -876,15 +898,13 @@ function closeReader() {
 // A spam email left the Spam folder (deleted or not spam): drop it from the
 // list, fix the count and open its neighbour.
 async function leaveSpamMessage(id, messageId) {
-  const r = state.spam.get(id);
-  const list = r?.messages ?? [];
-  const idx = list.findIndex((m) => m.id === messageId);
-  const gone = list[idx];
-  const next = idx === -1 ? null : list[idx + 1] ?? list[idx - 1];
-  if (r) r.messages = list.filter((m) => m.id !== messageId);
+  const gone = sectionItems('spam', id, messageId)[0];
+  const next = sectionNeighbour('spam', id, messageId);
+  const list = state.selected?.list;
+  dropFromSections('spam', id, messageId);
   // Opened emails were marked read already, so only unread ones change the count.
   if (gone && gone.read === false) await adjustSpamUnread(id, -1);
-  if (next) openMessage(id, next.id, { folder: 'spam' });
+  if (next) openMessage(next.accountId, next.id, { folder: 'spam', list });
   else closeReader();
 }
 
@@ -905,9 +925,10 @@ function renderReaderEmpty() {
 
 let openSeq = 0;
 
-async function openMessage(id, messageId, { folder } = {}) {
+// list: the section key when opened from "Recently read" / "Spam".
+async function openMessage(id, messageId, { folder, list } = {}) {
   const seq = ++openSeq;
-  state.selected = { accountId: id, messageId, folder };
+  state.selected = { accountId: id, messageId, folder, list };
   state.message = null;
   state.showRemoteImages = false;
   markSeen(keyOf(id, messageId));
@@ -1054,20 +1075,15 @@ document.addEventListener('click', async (e) => {
       return setView(el.dataset.provider || null);
     case 'view-account':
       return setView(state.view.provider, id);
-    case 'toggle-recent':
-      if (state.recentOpen.has(id)) {
-        state.recentOpen.delete(id);
+    case 'toggle-section': {
+      const { kind, key } = el.dataset;
+      if (state.open[kind].has(key)) {
+        state.open[kind].delete(key);
         return renderSidebar();
       }
-      state.recentOpen.add(id);
-      return loadRecent(id);
-    case 'toggle-spam':
-      if (state.spamOpen.has(id)) {
-        state.spamOpen.delete(id);
-        return renderSidebar();
-      }
-      state.spamOpen.add(id);
-      return loadSpam(id);
+      state.open[kind].add(key);
+      return loadSection(kind, key);
+    }
     case 'pick':
       toggleChecked(el.dataset.key, el.checked, { range: e.shiftKey });
       return renderSidebar();
@@ -1089,7 +1105,7 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       return openAccountMenu(el, id);
     case 'open':
-      return openMessage(id, messageId, { folder: el.dataset.folder });
+      return openMessage(id, messageId, { folder: el.dataset.folder, list: el.dataset.list });
     case 'signin':
       return addAccount(state.accounts[id].provider, state.accounts[id].email);
     case 'refresh-account':

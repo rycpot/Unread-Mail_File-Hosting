@@ -10,8 +10,9 @@ Trash or Deleted Items), without opening the webmail site.
   native messaging) with app-specific passwords kept in the macOS Keychain. New
   mail arrives by push (IMAP IDLE) within about a second.
 - Select several emails (or all) to mark them read or move them to Trash (with a
-  confirmation). Each account also has **Recently read** and **Spam** sections;
-  Spam shows its unread count, and spam can be read, deleted or marked *Not spam*.
+  confirmation). Each account, and **All accounts** combined, has collapsed
+  **Recently read** and **Spam** sections at the bottom; Spam lists unread spam
+  only, with its count, and it can be read, deleted or marked *Not spam*.
 - **Proton** (free plan) through the mail.proton.me session signed in in Chrome:
   unread list, mark read/unread, delete and Recently read. Bodies and attachments
   are end-to-end encrypted and are decrypted inside the extension with OpenPGP.js,

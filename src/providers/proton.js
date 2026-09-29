@@ -255,9 +255,9 @@ export const proton = {
     };
   },
 
-  // The newest emails in Spam, read or not, fetched only when asked for.
+  // The newest unread emails in Spam, fetched only when asked for.
   async fetchSpam(account, limit) {
-    return ((await listLabel(account, SPAM, { PageSize: String(limit) })).Messages ?? []).map(toSummary);
+    return ((await listLabel(account, SPAM, { Unread: '1', PageSize: String(limit) })).Messages ?? []).map(toSummary);
   },
 
   // Back to the inbox, as the web app's "Not spam" does.

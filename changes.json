@@ -1,4 +1,5 @@
 {
+  "0.7.1": "Recently read and Spam also under All accounts, combined for every account. Spam now lists unread spam only.",
   "0.7.0": "Bulk delete with confirmation, a Spam section per account (unread count, Not spam, delete), and bigger icons in grouped notifications.",
   "0.6.4": "Clearer message when the helper is missing: it points to the one-line install command.",
   "0.6.3": "One-command installer; running it again also updates.",

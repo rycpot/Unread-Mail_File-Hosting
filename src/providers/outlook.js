@@ -32,11 +32,13 @@ export const outlook = {
     return { unreadCount: folder.unreadItemCount ?? messages.length, spamUnread: junk?.unreadItemCount ?? 0, messages };
   },
 
-  // The newest emails in Junk Email, read or not, fetched only when asked for.
+  // The newest unread emails in Junk Email, fetched only when asked for. (The
+  // date clause lets Graph combine $orderby with the filter, see listInbox.)
   async fetchSpam(account, limit) {
+    const filter = enc('receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false');
     const list = await apiFetch(
       account,
-      `${API}/mailFolders/junkemail/messages?$orderby=receivedDateTime%20desc&$top=${limit}` +
+      `${API}/mailFolders/junkemail/messages?$filter=${filter}&$orderby=receivedDateTime%20desc&$top=${limit}` +
         '&$select=id,subject,from,receivedDateTime,bodyPreview,isRead',
     );
     return (list.value ?? []).map((m) => ({ ...toSummary(m), read: m.isRead }));
