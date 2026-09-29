@@ -703,6 +703,7 @@ def _install_info():
     except (OSError, ValueError):
         info = {}
     ext = info.get('extensionDir')
+    ext = ext and os.path.realpath(ext)  # write to the real folder, not a link to it
     if not ext or not os.path.isfile(os.path.join(ext, 'manifest.json')):
         raise HelperError('not_configured', 'Run update-mail (or helper/install.sh) once in Terminal to enable one-click updates.')
     return ext
@@ -722,11 +723,15 @@ def _download_update():
 def cmd_self_update(req):
     ext = _install_info()
     try:
-        with open(os.path.join(ext, 'manifest.json')) as f:
-            current = json.load(f)
+        return _self_update(ext)
     except PermissionError:
-        raise HelperError('permission', "Chrome isn't allowed to change files in {}. Allow Google Chrome under "
-                          'System Settings → Privacy & Security → Files and Folders, or run update-mail.'.format(ext))
+        raise HelperError('permission', "macOS doesn't let the helper change files in {}. Run update-mail (or "
+                          'helper/install.sh) once: it moves the folder to ~/UnreadMail, which is allowed.'.format(ext))
+
+
+def _self_update(ext):
+    with open(os.path.join(ext, 'manifest.json')) as f:
+        current = json.load(f)
     try:
         archive = zipfile.ZipFile(io.BytesIO(_download_update()))
     except zipfile.BadZipFile:

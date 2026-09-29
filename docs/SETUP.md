@@ -92,9 +92,13 @@ there is a newer version, a bar at the top shows it with what changed:
   checks straight away.
 
 This needs the helper from section 5, installed or refreshed once with version
-0.6.0 or later (the installer records where your extension folder is). If Chrome
-is not allowed to change files in that folder, macOS asks once, or allow Google
-Chrome under **System Settings → Privacy & Security → Files and Folders**.
+0.6.1 or later (the installer records where your extension folder is).
+
+macOS does not let the helper change files in **Downloads, Documents or Desktop**.
+If the extension folder is in one of those, the installer moves it to
+`~/UnreadMail` and leaves a link at the old path, so Chrome, `update-mail` and your
+accounts carry on unchanged. Don't delete that link: Chrome loads the extension
+through it.
 
 Manual update (always works):
 

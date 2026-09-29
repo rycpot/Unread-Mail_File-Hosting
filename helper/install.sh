@@ -5,7 +5,31 @@ set -eu
 
 HOST_NAME="com.unreadmail.imap"
 EXTENSION_ID="gnkolniepchhhfhnopbhgbnedkplhjjj"
-HERE="$(cd "$(dirname "$0")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+
+# macOS protects Downloads, Documents and Desktop from helper programs, so
+# "Install update" could not write the extension there. Move the folder to
+# ~/UnreadMail and leave a link at the old path: Chrome (which loaded the old
+# path), update-mail and your accounts carry on unchanged.
+EXT_DIR="$(cd "$HERE/.." && pwd -P)"
+if [ "$(uname -s)" = Darwin ] && [ -f "$EXT_DIR/manifest.json" ]; then
+  case "$EXT_DIR" in
+    "$HOME/Downloads/"*|"$HOME/Documents/"*|"$HOME/Desktop/"*)
+      TARGET="$HOME/UnreadMail"
+      if [ -e "$TARGET" ]; then
+        echo "Note: $EXT_DIR is in a folder macOS protects, so one-click updates can't write to it," >&2
+        echo "and $TARGET already exists. Move the extension folder out of it yourself." >&2
+      else
+        mv "$EXT_DIR" "$TARGET"
+        ln -s "$TARGET" "$EXT_DIR"
+        echo "Moved the extension folder to $TARGET (macOS protects $(dirname "$EXT_DIR"));"
+        echo "$EXT_DIR now links to it, so Chrome and update-mail keep working."
+        EXT_DIR="$TARGET"
+        HERE="$TARGET/helper"
+      fi
+      ;;
+  esac
+fi
 
 PYTHON="$(command -v python3 || true)"
 if [ -z "$PYTHON" ]; then
@@ -41,7 +65,6 @@ EOF
 chmod 755 "$LAUNCHER"
 
 # Remember the extension folder, so "Install update" in the app can update it.
-EXT_DIR="$(cd "$HERE/.." && pwd)"
 if [ -f "$EXT_DIR/manifest.json" ]; then
   "$PYTHON" -c 'import json, sys; json.dump({"extensionDir": sys.argv[1]}, open(sys.argv[2], "w"))' \
     "$EXT_DIR" "$INSTALL_DIR/install.json"
