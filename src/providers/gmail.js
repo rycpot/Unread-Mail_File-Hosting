@@ -75,6 +75,18 @@ export const gmail = {
     });
   },
 
+  // One request per 1000 messages; batchModify is all-or-nothing, so there are
+  // no per-message failures to report (errors throw).
+  async setReadMany(account, ids, read) {
+    for (let i = 0; i < ids.length; i += 1000) {
+      await apiFetch(account, `${API}/messages/batchModify`, {
+        method: 'POST',
+        body: { ids: ids.slice(i, i + 1000), ...(read ? { removeLabelIds: ['UNREAD'] } : { addLabelIds: ['UNREAD'] }) },
+      });
+    }
+    return [];
+  },
+
   // Moves to Trash (recoverable for 30 days), never a permanent delete.
   async trash(account, id) {
     await apiFetch(account, `${API}/messages/${id}/trash`, { method: 'POST' });

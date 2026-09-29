@@ -37,6 +37,8 @@ const state = {
   message: null, // full message currently in the reader
   showRemoteImages: false,
   refreshing: new Set(),
+  checked: new Map(), // accountId -> Set of checked message ids
+  lastPicked: null, // { accountId, messageId } anchor for shift-click ranges
 };
 
 const $ = (id) => document.getElementById(id);
@@ -161,6 +163,8 @@ function renderSidebar() {
   const scroll = sidebar.scrollTop;
   sidebar.innerHTML = html;
   sidebar.scrollTop = scroll;
+  // "indeterminate" is a property only, it cannot be set from markup.
+  for (const box of sidebar.querySelectorAll('.pick-all[data-partial="true"]')) box.indeterminate = true;
 }
 
 function renderAccount(a) {
@@ -178,22 +182,34 @@ function renderAccount(a) {
       <button class="link-btn" data-action="refresh-account" data-account="${esc(a.id)}">Retry</button></div>`;
   }
 
-  const msgs = (m.messages ?? [])
+  const messages = m.messages ?? [];
+  const checked = checkedFor(a.id, messages);
+  const aid = esc(a.id);
+  const msgs = messages
     .map((msg) => {
       const sel = state.selected?.accountId === a.id && state.selected?.messageId === msg.id;
-      return `<li><button class="msg${sel ? ' selected' : ''}${msg.read ? ' read' : ''}" data-action="open" data-account="${esc(a.id)}" data-message="${esc(msg.id)}">
-        <div class="msg-top"><span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span></div>
-        <div class="msg-subject">${esc(msg.subject || '(no subject)')}</div>
-        <div class="msg-snippet">${esc(msg.snippet)}</div>
-      </button></li>`;
+      const isChecked = checked.has(msg.id);
+      return `<li class="msg-row${sel ? ' selected' : ''}${isChecked ? ' checked' : ''}${msg.read ? ' read' : ''}">
+        <input type="checkbox" class="pick" data-action="pick" data-account="${aid}" data-message="${esc(msg.id)}" ${isChecked ? 'checked' : ''} aria-label="Select email">
+        <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}">
+          <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
+          <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
+        </button></li>`;
     })
     .join('');
-  const empty = status === 'pending' ? 'Checking…' : 'No unread mail';
-  const more = count > (m.messages?.length ?? 0) && m.messages?.length
-    ? `<li class="stale-note">Showing the newest ${m.messages.length} of ${count} unread.</li>` : '';
+  const more = count > messages.length && messages.length
+    ? `<li class="stale-note">Showing the newest ${messages.length} of ${count} unread.</li>` : '';
+  const allChecked = messages.length > 0 && checked.size === messages.length;
+  const bulkBar = checked.size
+    ? `<div class="bulk-bar"><span>${checked.size} selected</span>
+        <button class="tool-btn small" data-action="bulk-read" data-account="${aid}">${icon.mailOpen}Mark read</button>
+        <button class="link-btn" data-action="bulk-clear" data-account="${aid}">Clear</button></div>`
+    : '';
 
   return `<div class="account${isCollapsed ? ' collapsed' : ''}${a.hidden ? ' is-hidden' : ''}">
     <div class="account-head">
+      <input type="checkbox" class="pick pick-all${messages.length ? '' : ' invisible'}" data-action="pick-all" data-account="${aid}"
+        ${allChecked ? 'checked' : ''} data-partial="${checked.size > 0 && !allChecked}" title="Select all" aria-label="Select all emails in ${esc(a.email)}">
       <button class="account-toggle" data-action="toggle" data-account="${esc(a.id)}" aria-expanded="${!isCollapsed}">
         ${icon.chevron.replace('<svg', '<svg class="chevron"')}
         <span class="account-email" title="${esc(a.email)}">${esc(a.email)}</span>
@@ -205,8 +221,56 @@ function renderAccount(a) {
       </div>
     </div>
     ${notice}
-    <ul class="messages">${msgs || `<li class="empty">${empty}</li>`}${more}</ul>
+    ${bulkBar}
+    ${msgs ? `<ul class="messages">${msgs}${more}</ul>` : ''}
   </div>`;
+}
+
+// Checked (multi-select) emails per account. Ids that no longer exist in the
+// list, e.g. after a refresh, are dropped.
+function checkedFor(id, messages) {
+  const set = state.checked.get(id);
+  if (!set) return new Set();
+  const present = new Set(messages.map((x) => x.id));
+  for (const mid of set) if (!present.has(mid)) set.delete(mid);
+  return set;
+}
+
+function toggleChecked(id, messageId, on, { range = false } = {}) {
+  const messages = state.mail[id]?.messages ?? [];
+  const set = state.checked.get(id) ?? new Set();
+  state.checked.set(id, set);
+  const idx = messages.findIndex((x) => x.id === messageId);
+  const anchor = state.lastPicked?.accountId === id ? messages.findIndex((x) => x.id === state.lastPicked.messageId) : -1;
+  // Shift-click selects the whole range from the previously clicked email.
+  const ids = range && anchor !== -1 && idx !== -1
+    ? messages.slice(Math.min(anchor, idx), Math.max(anchor, idx) + 1).map((x) => x.id)
+    : [messageId];
+  for (const mid of ids) on ? set.add(mid) : set.delete(mid);
+  state.lastPicked = { accountId: id, messageId };
+}
+
+async function bulkMarkRead(id) {
+  const a = state.accounts[id];
+  const ids = [...(state.checked.get(id) ?? [])];
+  if (!ids.length) return;
+  const failed = new Set(await providers[a.provider].setReadMany(a, ids, true));
+  const done = new Set(ids.filter((x) => !failed.has(x)));
+  const m = await getMail(id);
+  if (m) {
+    const dropped = (m.messages ?? []).filter((x) => done.has(x.id));
+    await patchMail(id, {
+      messages: (m.messages ?? []).filter((x) => !done.has(x.id)),
+      unreadCount: Math.max(0, (m.unreadCount ?? 0) - dropped.filter((x) => !x.read).length),
+    });
+  }
+  state.checked.set(id, failed);
+  if (state.message && done.has(state.message.id)) {
+    state.message.isRead = true;
+    renderReaderToolbar();
+  }
+  if (failed.size) toast(`${failed.size} of ${ids.length} couldn't be marked as read. They are still selected.`, { error: true });
+  else toast(`Marked ${done.size} as read`);
 }
 
 function openAccountMenu(button, id) {
@@ -455,6 +519,20 @@ document.addEventListener('click', async (e) => {
     case 'toggle':
       collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id);
       saveCollapsed();
+      return renderSidebar();
+    case 'pick':
+      toggleChecked(id, messageId, el.checked, { range: e.shiftKey });
+      return renderSidebar();
+    case 'pick-all': {
+      const ids = (state.mail[id]?.messages ?? []).map((x) => x.id);
+      state.checked.set(id, new Set(el.checked ? ids : []));
+      return renderSidebar();
+    }
+    case 'bulk-clear':
+      state.checked.delete(id);
+      return renderSidebar();
+    case 'bulk-read':
+      await withBusy(el, () => bulkMarkRead(id));
       return renderSidebar();
     case 'account-menu':
       e.stopPropagation();

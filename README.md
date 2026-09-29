@@ -24,7 +24,10 @@ sessions.
 └──────────────────────────────┴──────────────────────────────────────┘
 ```
 
-- Accounts are grouped by provider, with their unread emails listed under each account.
+- Accounts are grouped by provider, with their unread emails listed under each account
+  (sender, time and subject; accounts with no unread mail show only their header).
+- Tick emails, or use an account's select-all box, then **Mark read** to clear them
+  in one request. Shift-click ticks a range.
 - Accounts never disappear on their own. If one signs out or fails to refresh, it
   shows a notice and keeps its last known emails. Only **⋯ → Remove account**
   deletes one.

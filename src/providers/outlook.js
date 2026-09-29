@@ -102,6 +102,29 @@ export const outlook = {
     await apiFetch(account, `${API}/messages/${enc(id)}`, { method: 'PATCH', body: { isRead: read } });
   },
 
+  // Graph JSON batching, 20 requests per call. Returns the ids that failed.
+  async setReadMany(account, ids, read) {
+    const failed = [];
+    for (let i = 0; i < ids.length; i += 20) {
+      const chunk = ids.slice(i, i + 20);
+      const res = await apiFetch(account, 'https://graph.microsoft.com/v1.0/$batch', {
+        method: 'POST',
+        body: {
+          requests: chunk.map((id, n) => ({
+            id: String(n),
+            method: 'PATCH',
+            url: `/me/messages/${enc(id)}`,
+            headers: { 'Content-Type': 'application/json' },
+            body: { isRead: read },
+          })),
+        },
+      });
+      const ok = new Set((res.responses ?? []).filter((r) => r.status >= 200 && r.status < 300).map((r) => Number(r.id)));
+      chunk.forEach((id, n) => ok.has(n) || failed.push(id));
+    }
+    return failed;
+  },
+
   // Moves to Deleted Items (recoverable), never a permanent delete.
   async trash(account, id) {
     await apiFetch(account, `${API}/messages/${enc(id)}/move`, {

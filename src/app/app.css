@@ -219,14 +219,14 @@ button { font: inherit; color: inherit; }
 .account:first-of-type { border-top: 0; }
 .account.is-hidden { opacity: 0.55; }
 
-.account-head { display: flex; align-items: center; }
+.account-head { display: flex; align-items: center; padding-left: 12px; }
 .account-toggle {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 4px 10px 12px;
+  gap: 6px;
+  padding: 7px 4px 7px 4px;
   border: 0;
   background: none;
   text-align: left;
@@ -251,14 +251,34 @@ button { font: inherit; color: inherit; }
 .status-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .status-dot.auth { background: var(--warn); }
 .status-dot.error { background: var(--danger); }
-.account-head .menu-wrap { margin-right: 8px; }
+.account-head .menu-wrap { margin-right: 6px; }
+.account-head .icon-btn { width: 28px; height: 28px; }
+
+/* Multi-select checkboxes share one column so they line up. */
+.pick { flex: none; width: 14px; height: 14px; margin: 0 8px 0 0; accent-color: var(--accent); cursor: pointer; }
+.pick.invisible { visibility: hidden; }
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 4px 34px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.bulk-bar span { flex: 1; font-weight: 600; color: var(--accent); }
+.tool-btn.small { padding: 3px 8px; font-size: 12px; }
+.tool-btn.small svg { width: 14px; height: 14px; }
 
 .account-notice {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 12px 8px 36px;
-  padding: 7px 10px;
+  margin: 0 12px 6px 34px;
+  padding: 5px 8px;
   border-radius: 6px;
   background: var(--warn-soft);
   color: var(--warn);
@@ -277,34 +297,46 @@ button { font: inherit; color: inherit; }
 }
 .link-btn:hover { text-decoration: underline; }
 
-.account.collapsed .messages, .account.collapsed .account-notice { display: none; }
+.account.collapsed .messages, .account.collapsed .account-notice, .account.collapsed .bulk-bar { display: none; }
 
 /* ---------- sidebar: messages ---------- */
 
-.messages { list-style: none; margin: 0; padding: 0 0 6px; }
-.messages .empty { padding: 4px 16px 10px 36px; color: var(--text-3); font-size: 13px; }
+.messages { list-style: none; margin: 0; padding: 0 0 4px; }
+
+.msg-row {
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  border-left: 3px solid transparent;
+}
+.msg-row:hover { background: var(--surface-2); }
+.msg-row.checked { background: var(--surface-2); }
+.msg-row.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+/* Line the email checkboxes up with the account's select-all box. */
+.msg-row .pick { margin-left: -3px; }
 
 .msg {
-  display: block;
-  width: 100%;
-  padding: 8px 14px 8px 36px;
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 8px;
+  padding: 4px 12px 5px 4px;
   border: 0;
-  border-left: 3px solid transparent;
   background: none;
   text-align: left;
+  font-size: 13px;
+  line-height: 1.35;
   cursor: pointer;
 }
-.msg:hover { background: var(--surface-2); }
-.msg.selected { background: var(--accent-soft); border-left-color: var(--accent); }
-.msg-top { display: flex; align-items: baseline; gap: 8px; }
-.msg-from { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.msg-time { flex: none; font-size: 12px; color: var(--text-2); }
-.msg-subject, .msg-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.msg-subject { font-weight: 500; }
-.msg-snippet { color: var(--text-3); font-size: 13px; }
-.msg.read .msg-from, .msg.read .msg-subject { font-weight: 400; color: var(--text-2); }
+.msg-from, .msg-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-from { font-weight: 600; }
+.msg-time { font-size: 11px; color: var(--text-2); align-self: center; }
+.msg-subject { grid-column: 1 / -1; color: var(--text-2); }
+.msg-row.read .msg-from { font-weight: 400; color: var(--text-2); }
+.msg-row.read .msg-subject { color: var(--text-3); }
 
-.stale-note { padding: 0 16px 6px 36px; color: var(--text-3); font-size: 12px; }
+.stale-note { padding: 2px 16px 4px 37px; color: var(--text-3); font-size: 11px; }
 
 .sidebar-footer { padding: 14px 16px; color: var(--text-3); font-size: 12px; }
 
