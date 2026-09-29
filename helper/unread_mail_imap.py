@@ -23,6 +23,7 @@ import email.header
 import email.policy
 import email.utils
 import imaplib
+import io
 import json
 import os
 import re
@@ -33,8 +34,10 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import zipfile
 
-VERSION = 2
+VERSION = 3
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -677,6 +680,95 @@ def watch_loop(first_request):
             apply(req.get('accounts'))
 
 
+# ---------- one-click update of the extension ----------
+#
+# An unpacked extension cannot change its own files, so the "Install update"
+# button asks the helper to. install.sh records the extension folder in
+# install.json next to this file. The ZIP comes only from this repository's
+# branch over HTTPS; it must carry the same extension key (so it is the same
+# extension) before anything is written. src/config.js is kept, as by
+# update-mail. Accounts and settings are in Chrome's storage, not in the folder.
+
+UPDATE_REPO = 'rycpot/unread-emails-notifier'
+UPDATE_BRANCH = 'claude/blissful-faraday-8ykg9h'
+UPDATE_KEEP = {'src/config.js'}
+UPDATE_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _install_info():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'install.json')
+    try:
+        with open(path) as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        info = {}
+    ext = info.get('extensionDir')
+    if not ext or not os.path.isfile(os.path.join(ext, 'manifest.json')):
+        raise HelperError('not_configured', 'Run update-mail (or helper/install.sh) once in Terminal to enable one-click updates.')
+    return ext
+
+
+def _download_update():
+    # Tests point this at a local file:// ZIP.
+    url = os.environ.get('UNREAD_MAIL_UPDATE_URL') or \
+        'https://codeload.github.com/{}/zip/refs/heads/{}'.format(UPDATE_REPO, UPDATE_BRANCH)
+    with urllib.request.urlopen(url, context=tls_context(), timeout=60) as res:
+        data = res.read(UPDATE_MAX_BYTES + 1)
+    if len(data) > UPDATE_MAX_BYTES:
+        raise HelperError('update', 'The update download is unexpectedly large; not installed.')
+    return data
+
+
+def cmd_self_update(req):
+    ext = _install_info()
+    try:
+        with open(os.path.join(ext, 'manifest.json')) as f:
+            current = json.load(f)
+    except PermissionError:
+        raise HelperError('permission', "Chrome isn't allowed to change files in {}. Allow Google Chrome under "
+                          'System Settings → Privacy & Security → Files and Folders, or run update-mail.'.format(ext))
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(_download_update()))
+    except zipfile.BadZipFile:
+        raise HelperError('update', 'The update download was not a valid ZIP file.')
+    files = [i for i in archive.infolist() if not i.is_dir()]
+    prefix = files[0].filename.split('/', 1)[0] + '/' if files else ''
+    try:
+        new = json.loads(archive.read(prefix + 'manifest.json'))
+    except (KeyError, ValueError):
+        raise HelperError('update', 'The download has no valid manifest.json; not installed.')
+    if new.get('key') != current.get('key'):
+        raise HelperError('update', 'The download is a different extension (key mismatch); not installed.')
+
+    for n, info in enumerate(files, 1):
+        if not info.filename.startswith(prefix):
+            continue
+        rel = info.filename[len(prefix):]
+        parts = rel.split('/')
+        if not rel or rel.startswith('/') or '..' in parts or '\\' in rel:
+            continue  # never write outside the extension folder
+        dest = os.path.join(ext, *parts)
+        if rel in UPDATE_KEEP and os.path.exists(dest):
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        tmp = dest + '.updating'
+        with open(tmp, 'wb') as f:
+            f.write(archive.read(info))
+        if (info.external_attr >> 16) & 0o111:
+            os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        if n % 20 == 0:
+            progress(n, len(files))
+
+    # Refresh the installed helper and Chrome's registration of it.
+    warning = None
+    res = subprocess.run(['/bin/sh', os.path.join(ext, 'helper', 'install.sh')],
+                         capture_output=True, text=True, timeout=120)
+    if res.returncode != 0:
+        warning = 'Updated, but refreshing the helper failed; run update-mail. {}'.format(res.stderr.strip()[-300:])
+    return {'version': new.get('version'), 'helperWarning': warning}
+
+
 COMMANDS = {
     'ping': lambda req: {'version': VERSION, 'platform': sys.platform,
                          'caCerts': tls_context().cert_store_stats().get('x509_ca', 0)},
@@ -689,6 +781,7 @@ COMMANDS = {
     'setRead': cmd_set_read,
     'markAllRead': cmd_mark_all_read,
     'trash': cmd_trash,
+    'selfUpdate': cmd_self_update,
 }
 
 # imaplib.uid() only accepts commands it knows; EXPUNGE via UID needs UIDPLUS.

@@ -6,6 +6,8 @@ import {
 } from '../storage.js';
 import { refreshAccount } from '../sync.js';
 import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
+import { callHelper } from '../native.js';
+import { compareVersions, currentVersion } from '../update.js';
 
 // ---------- icons ----------
 
@@ -1033,6 +1035,77 @@ for (const btn of document.querySelectorAll('#bannerDialog [data-banner]')) {
   });
 }
 askBannerStyle();
+
+// ---------- update banner ----------
+//
+// The service worker checks GitHub every 6 hours and stores the result under
+// "update". "Install update" asks the IMAP helper to download the new version
+// into the extension folder (keeping src/config.js), then reloads the
+// extension. Accounts, settings and sign-ins are in Chrome's storage for this
+// extension, so they are untouched.
+
+async function renderUpdateBar() {
+  const { update, dismissedUpdate } = await chrome.storage.local.get(['update', 'dismissedUpdate']);
+  const show = update && compareVersions(update.version, currentVersion()) > 0 && update.version !== dismissedUpdate;
+  $('updateBar').hidden = !show;
+  if (!show) return;
+  $('updateTitle').textContent = `Version ${update.version} is available.`;
+  const notes = update.notes.map((n) => n.text);
+  $('updateNotes').textContent = notes.join(' · ');
+  $('updateNotes').title = update.notes.map((n) => `${n.version}: ${n.text}`).join('\n');
+}
+
+async function installUpdate() {
+  const { update } = await chrome.storage.local.get('update');
+  const btn = $('updateInstall');
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  try {
+    const res = await callHelper({ cmd: 'selfUpdate', version: update?.version }, {
+      onProgress: (done, total) => (btn.textContent = `Installing… ${Math.round((done / total) * 100)}%`),
+    });
+    await chrome.storage.local.set({ updating: { from: currentVersion(), to: res.version } });
+    // The reloaded extension reopens this tab (see background.js).
+    chrome.runtime.reload();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Install update';
+    const msg = e.code === 'bad_request' || e.code === 'not_configured'
+      ? 'One-click updates need the helper refreshed once: run update-mail in Terminal, then reload the extension.'
+      : e.message;
+    toast(msg, { error: true });
+  }
+}
+
+$('updateInstall').addEventListener('click', installUpdate);
+$('updateLater').addEventListener('click', async () => {
+  const { update } = await chrome.storage.local.get('update');
+  await chrome.storage.local.set({ dismissedUpdate: update?.version });
+});
+$('versionText').textContent = `Version ${currentVersion()}`;
+$('checkUpdate').addEventListener('click', async () => {
+  $('checkUpdate').disabled = true;
+  const res = await chrome.runtime.sendMessage({ cmd: 'checkUpdate' });
+  $('checkUpdate').disabled = false;
+  if (!res?.ok) return toast(`Couldn't check for updates: ${res?.error ?? 'no answer'}`, { error: true });
+  if (compareVersions(res.update.version, currentVersion()) > 0) {
+    await chrome.storage.local.remove('dismissedUpdate'); // show it again even if put off
+    closeMenus();
+  } else {
+    toast(`You're up to date (${currentVersion()}).`);
+  }
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.update || changes.dismissedUpdate)) renderUpdateBar();
+});
+renderUpdateBar();
+{
+  const { justUpdated } = await chrome.storage.local.get('justUpdated');
+  if (justUpdated) {
+    await chrome.storage.local.remove('justUpdated');
+    toast(`Updated to version ${justUpdated}. Accounts and settings are unchanged.`);
+  }
+}
 
 // "#open=<accountId>::<messageId>" (from a notification click) opens that email.
 function openFromHash() {

@@ -82,12 +82,30 @@ there are copied into the extension's storage automatically.)
 
 ## Updating the extension
 
-- **ZIP:** download the branch ZIP, copy its files over your existing folder,
-  then click reload ↻ on the extension card in `chrome://extensions`.
-- **git:** `git pull`, then reload ↻.
+The app checks this repository's branch every 6 hours (and at Chrome start). When
+there is a newer version, a bar at the top shows it with what changed:
 
-Never **Remove** the extension to update it: removing it deletes its saved data
-(client IDs, sign-ins and cached mail).
+- **Install update** has the IMAP helper download the new version from GitHub,
+  replace the files in your extension folder (keeping `src/config.js`), refresh
+  itself, and reload the extension. The app tab reopens with "Updated to version …".
+- **Later** hides the bar until the next version. **Settings → Check for updates**
+  checks straight away.
+
+This needs the helper from section 5, installed or refreshed once with version
+0.6.0 or later (the installer records where your extension folder is). If Chrome
+is not allowed to change files in that folder, macOS asks once, or allow Google
+Chrome under **System Settings → Privacy & Security → Files and Folders**.
+
+Manual update (always works):
+
+- **ZIP:** download the branch ZIP, copy its files over your existing folder
+  (except `src/config.js`), run `sh helper/install.sh`, then click reload ↻ on the
+  extension card in `chrome://extensions`.
+- **git:** `git pull`, `sh helper/install.sh`, then reload ↻.
+
+Updating never touches your accounts, settings, sign-ins or cached mail: they are in
+Chrome's storage for this extension, not in its folder. Never **Remove** the
+extension to update it: removing it deletes that data.
 
 ## 4. Add your accounts
 

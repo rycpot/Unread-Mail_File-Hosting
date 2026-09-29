@@ -51,6 +51,10 @@
           <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
           <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
           <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>
+          <div class="row version-row">
+            <span id="versionText"></span>
+            <button type="button" class="link-btn" id="checkUpdate">Check for updates</button>
+          </div>
           <form class="client-ids" id="clientIdsForm">
             <div class="section-title">OAuth client IDs</div>
             <label>Google client ID
@@ -66,6 +70,17 @@
       </div>
     </div>
   </header>
+
+  <div class="update-bar" id="updateBar" role="status" hidden>
+    <div class="update-text">
+      <strong id="updateTitle"></strong>
+      <span id="updateNotes"></span>
+    </div>
+    <div class="update-actions">
+      <button type="button" class="link-btn" id="updateLater">Later</button>
+      <button type="button" class="tool-btn small primary" id="updateInstall">Install update</button>
+    </div>
+  </div>
 
   <main class="split">
     <aside class="sidebar" id="sidebar" aria-label="Accounts and unread mail"></aside>

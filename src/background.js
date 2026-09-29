@@ -6,13 +6,17 @@ import { providers } from './providers/index.js';
 import { getAccounts, getSettings } from './storage.js';
 import { notificationClosed, queueNewMail, testNotification } from './notify.js';
 import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
+import { checkForUpdate } from './update.js';
 
 onNewMail(queueNewMail);
 
 const ALARM = 'poll';
+const UPDATE_ALARM = 'update-check';
 const APP_URL = chrome.runtime.getURL('src/app/app.html');
 
 async function schedule() {
+  // Every 6 hours; left alone if already set, so changing settings doesn't reset it.
+  if (!(await chrome.alarms.get(UPDATE_ALARM))) chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
   const { pollMinutes } = await getSettings();
   await chrome.alarms.clear(ALARM);
   // 30 seconds is the shortest alarm period Chrome allows.
@@ -98,22 +102,34 @@ async function injectIntoOpenProtonTabs() {
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+const checkUpdateQuietly = () => checkForUpdate().catch((e) => console.warn('[update]', e.message));
+
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   schedule();
   refreshAll();
   injectIntoOpenProtonTabs();
+  checkUpdateQuietly();
+  // Installed from the app's update banner: reopen the app, which says so.
+  const { updating } = await chrome.storage.local.get('updating');
+  if (reason === 'update' && updating) {
+    await chrome.storage.local.remove('updating');
+    await chrome.storage.local.set({ justUpdated: chrome.runtime.getManifest().version });
+    openApp();
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
   schedule();
   refreshAll();
   injectIntoOpenProtonTabs();
+  checkUpdateQuietly();
 });
 
 // Also runs whenever the service worker starts, e.g. woken by the alarm.
 startPush();
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === UPDATE_ALARM) return checkUpdateQuietly();
   if (alarm.name !== ALARM) return;
   if (!pushPort) startPush();
   const { pollMinutes } = await getSettings();
@@ -169,6 +185,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.cmd === 'testNotification') {
     testNotification().then(() => sendResponse({ ok: true }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.cmd === 'checkUpdate') {
+    checkForUpdate().then((update) => sendResponse({ ok: true, update }), (e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   if (msg?.cmd === 'refresh') {

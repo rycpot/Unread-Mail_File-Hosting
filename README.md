@@ -33,6 +33,7 @@ load the folder unpacked.
 | Sign-in | `chrome.identity.launchWebAuthFlow`, so several accounts per provider are supported. Google uses the token flow; Microsoft uses auth code + PKCE. Renewal is silent: a refresh token (Microsoft), then `prompt=none` + `login_hint`. |
 | Checking | Gmail, Outlook and Proton: a `chrome.alarms` alarm every 30 s to 15 min (Settings); Gmail reuses already-fetched headers, so a check without new mail is 2 requests. iCloud, Yahoo and AOL: **push** — while Chrome runs, the helper keeps one IMAP IDLE connection per account (renewed every 25 min) and reports changes, which are refreshed within about a second; they are only re-checked every 10 min as a safety net, or at ≥ 2 min if push is unavailable. State lives in `chrome.storage.local`. |
 | Notifications | Routed by the macOS banner style for Chrome, which the user picks once (a required choice after the first account; changeable in Settings). **Persistent:** the first new email alerts at once (notification + soft two-note chime); while that notification stays open, further emails silently update it to "N new emails" with each provider's icon; once it is closed or clicked, the next email alerts again immediately. **Temporary** (macOS default): emails within 8 s of the last banner are merged into it silently, later ones get a fresh banner, and chimes are at least 20 s apart. With notifications off and sound on, chimes are at least 15 s apart. An email counts as new only if it was not listed before and arrived after the newest one already seen (IMAP: by UID); an account's first sync never alerts, and each email alerts at most once. |
+| Updates | The service worker compares the installed version with `manifest.json` on this branch every 6 h and shows a bar with the notes from `changes.json`. **Install update** asks the helper (`selfUpdate`) to download the branch ZIP from GitHub over HTTPS, check that it carries the same extension `key`, write it over the extension folder recorded by `install.sh` (keeping `src/config.js`), and re-run `install.sh`; the extension then reloads itself. Data lives in `chrome.storage`, so accounts and settings are kept. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
 
 ### Files
@@ -53,6 +54,8 @@ src/providers/proton.js  Proton adapter (signed-in web session)
 src/providers/proton-crypto.js  Proton key unlocking and message/attachment decryption
 src/content/proton-session.js  passes Proton's encrypted persisted-session entry to the extension
 src/native.js            native messaging client for the helper
+src/update.js            update check against this GitHub branch
+changes.json             one line per version, shown in the update bar
 helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
 src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0), OpenPGP.js 6.3.2 (LGPL-3.0),

@@ -40,6 +40,13 @@ exec "$PYTHON" "$INSTALL_DIR/unread_mail_imap.py" "\$@"
 EOF
 chmod 755 "$LAUNCHER"
 
+# Remember the extension folder, so "Install update" in the app can update it.
+EXT_DIR="$(cd "$HERE/.." && pwd)"
+if [ -f "$EXT_DIR/manifest.json" ]; then
+  "$PYTHON" -c 'import json, sys; json.dump({"extensionDir": sys.argv[1]}, open(sys.argv[2], "w"))' \
+    "$EXT_DIR" "$INSTALL_DIR/install.json"
+fi
+
 IFS=:
 for dir in $MANIFEST_DIRS; do
   mkdir -p "$dir"
