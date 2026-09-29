@@ -180,7 +180,14 @@ mail.proton.me again and click **Sign in** in the app.
 independently; **Test** shows a sample notification and plays the chime.
 
 On macOS, Chrome's notifications also need to be allowed in **System Settings →
-Notifications → Google Chrome** (banner style "Temporary" or "Persistent").
+Notifications → Google Chrome**. The banner style you choose there (Temporary or
+Persistent) is asked once after your first account is connected, and can be changed
+under **Settings → Notification banners**; keep the two the same:
+
+- **Persistent:** one alert; the same banner then counts new mail silently until you
+  close it, after which the next email alerts again straight away.
+- **Temporary:** mail arriving after a banner has gone gets a new banner; chimes are
+  at least 20 seconds apart.
 
 ## Troubleshooting
 

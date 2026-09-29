@@ -109,6 +109,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     await load();
     renderSidebar();
     renderTopbar();
+    askBannerStyle();
   }
 });
 
@@ -140,6 +141,7 @@ function renderTopbar() {
   $('markReadOnOpen').checked = state.settings.markReadOnOpen;
   $('notifyEnabled').checked = state.settings.notifyEnabled;
   $('soundEnabled').checked = state.settings.soundEnabled;
+  $('bannerStyle').value = state.settings.bannerStyle;
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
@@ -979,6 +981,7 @@ $('markReadOnOpen').addEventListener('change', (e) => saveSettings({ markReadOnO
 $('loadRemoteImages').addEventListener('change', (e) => saveSettings({ loadRemoteImages: e.target.checked }));
 $('notifyEnabled').addEventListener('change', (e) => saveSettings({ notifyEnabled: e.target.checked }));
 $('soundEnabled').addEventListener('change', (e) => saveSettings({ soundEnabled: e.target.checked }));
+$('bannerStyle').addEventListener('change', (e) => saveSettings({ bannerStyle: e.target.value, bannerStyleChosen: true }));
 $('testNotify').addEventListener('click', async () => {
   const res = await chrome.runtime.sendMessage({ cmd: 'testNotification' });
   if (!state.settings.notifyEnabled && !state.settings.soundEnabled) toast('Notifications and sound are both off.');
@@ -1014,6 +1017,22 @@ await fillClientIds();
 renderTopbar();
 renderSidebar();
 renderReaderEmpty();
+
+// Banner style is a required choice, asked once as soon as there is an
+// account (the extension cannot detect it from macOS). Escape cannot skip it.
+function askBannerStyle() {
+  if (state.settings.bannerStyleChosen || !Object.keys(state.accounts).length || $('bannerDialog').open) return;
+  $('bannerDialog').showModal();
+}
+$('bannerDialog').addEventListener('cancel', (e) => e.preventDefault());
+for (const btn of document.querySelectorAll('#bannerDialog [data-banner]')) {
+  btn.addEventListener('click', async () => {
+    await saveSettings({ bannerStyle: btn.dataset.banner, bannerStyleChosen: true });
+    $('bannerDialog').close();
+    toast(`Notification banners: ${btn.dataset.banner}. You can change this in Settings.`);
+  });
+}
+askBannerStyle();
 
 // "#open=<accountId>::<messageId>" (from a notification click) opens that email.
 function openFromHash() {

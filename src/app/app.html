@@ -35,6 +35,15 @@
           <p class="settings-note">Gmail, Outlook and Proton are checked at this interval. iCloud, Yahoo and AOL
             update instantly (push) while the IMAP helper is connected.</p>
           <label class="row check"><input type="checkbox" id="notifyEnabled"> Notifications for new mail</label>
+          <label class="row">
+            <span>Notification banners</span>
+            <select id="bannerStyle">
+              <option value="temporary">Temporary</option>
+              <option value="persistent">Persistent</option>
+            </select>
+          </label>
+          <p class="settings-note">Match macOS System Settings → Notifications → Google Chrome. Persistent: one alert,
+            then the banner keeps counting until you close it. Temporary: a new banner for mail after it has gone.</p>
           <div class="row check sound-row">
             <label class="check-label"><input type="checkbox" id="soundEnabled"> Notification sound</label>
             <button type="button" class="link-btn" id="testNotify">Test</button>
@@ -92,6 +101,24 @@
         <button type="button" class="tool-btn" id="sessionCancel">Cancel</button>
         <button type="button" class="tool-btn" id="sessionOpen">Open Proton Mail</button>
         <button type="button" class="tool-btn primary" id="sessionRetry">I've signed in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="bannerDialog" aria-labelledby="bannerTitle">
+    <form method="dialog">
+      <h2 id="bannerTitle" tabindex="-1" autofocus>How does your Mac show Chrome's notifications?</h2>
+      <p class="dialog-help">Check <b>System Settings → Notifications → Google Chrome</b> and pick the same style, so
+        new-mail alerts behave well. You can change this later in Settings.</p>
+      <div class="banner-choices">
+        <button type="button" class="choice" data-banner="temporary">
+          <strong>Temporary</strong><span>Banners slide away after a few seconds (macOS default). New mail after
+            that gets a new banner.</span>
+        </button>
+        <button type="button" class="choice" data-banner="persistent">
+          <strong>Persistent</strong><span>Banners stay until you close them. One alert, then the same banner keeps
+            counting new mail silently.</span>
+        </button>
       </div>
     </form>
   </dialog>

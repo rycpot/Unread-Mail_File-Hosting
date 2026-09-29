@@ -574,3 +574,18 @@ button { font: inherit; color: inherit; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .tool-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tool-btn.primary:hover { background: var(--accent); filter: brightness(1.08); }
+
+.banner-choices { display: grid; gap: 10px; }
+.choice {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+.choice span { color: var(--text-2); font-size: 12px; line-height: 1.4; }

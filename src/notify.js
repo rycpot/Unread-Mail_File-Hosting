@@ -1,23 +1,33 @@
 // New-mail notifications and chime (background service worker only).
 //
-// The first new email shows a notification and plays the chime at once. While
-// that notification stays open (Chrome's "Persistent" style keeps it until you
-// close it), further new emails silently update it to "N new emails" with each
-// provider's icon: no new banner, no sound. Once it is closed (or clicked), the
-// next new email alerts again straight away. With notifications off but sound
-// on, chimes are at least SOUND_ONLY_GAP_MS apart. Emails already notified are
-// remembered, so the same email never alerts twice.
+// The route depends on the macOS banner style chosen in Settings (the
+// extension cannot detect it):
+//
+//   Persistent: the first new email shows a notification and chime at once.
+//     While that notification stays open, further new emails silently update
+//     it to "N new emails" with each provider's icon: no new banner, no sound.
+//     Once it is closed (or clicked), the next new email alerts again at once.
+//
+//   Temporary: banners leave the screen after about 5 s but the notification
+//     stays in Notification Center, so "open" says nothing about being seen.
+//     Emails within TEMP_MERGE_MS of the last banner are merged into it
+//     silently; later ones get a fresh banner. Chimes are at least
+//     TEMP_SOUND_GAP_MS apart.
+//
+// With notifications off but sound on, chimes are at least SOUND_ONLY_GAP_MS
+// apart. Emails already notified are remembered, so none alerts twice.
 
 import { providers } from './providers/index.js';
 import { getAccounts, getSettings } from './storage.js';
 
 const SOUND_ONLY_GAP_MS = 15000;
+const TEMP_MERGE_MS = 8000; // a Temporary banner is on screen for about 5 s
+const TEMP_SOUND_GAP_MS = 20000;
 const NOTIFICATION_ID = 'new-mail';
 const SEEN_KEY = 'notifiedKeys'; // chrome.storage.session: survives worker restarts
 const SEEN_MAX = 500;
 const ACTIVE_KEY = 'activeNotification'; // emails shown in the open notification
 
-let lastSoundAt = 0;
 let queue = Promise.resolve(); // handle arrivals one batch at a time
 
 const keyOf = (it) => `${it.accountId}::${it.id}`;
@@ -38,21 +48,26 @@ async function handle(items) {
   await chrome.storage.session.set({ [SEEN_KEY]: [...seen, ...fresh.map(keyOf)].slice(-SEEN_MAX) });
 
   const settings = await getSettings();
+  const now = Date.now();
+  const { lastSoundAt = 0, lastBannerAt = 0 } = await chrome.storage.session.get(['lastSoundAt', 'lastBannerAt']);
   let shown = null;
   let sound = false;
   if (settings.notifyEnabled) {
     // Is our notification still open (on screen or in Notification Center)?
     const open = Boolean((await chrome.notifications.getAll())[NOTIFICATION_ID]);
-    const active = open ? session[ACTIVE_KEY] ?? [] : [];
-    const all = [...active, ...fresh];
-    shown = await show(all, { update: open });
-    await chrome.storage.session.set({ [ACTIVE_KEY]: all });
-    sound = settings.soundEnabled && !shown.updated;
+    const temporary = settings.bannerStyle !== 'persistent';
+    // Persistent: merge while open. Temporary: merge only while the banner is
+    // (about to be) on screen.
+    const merge = open && (!temporary || now - lastBannerAt < TEMP_MERGE_MS);
+    const all = merge ? [...(session[ACTIVE_KEY] ?? []), ...fresh] : fresh;
+    shown = await show(all, { update: merge, persistent: !temporary });
+    await chrome.storage.session.set({ [ACTIVE_KEY]: all, ...(!shown.updated && { lastBannerAt: now }) });
+    sound = settings.soundEnabled && !shown.updated && (!temporary || now - lastSoundAt >= TEMP_SOUND_GAP_MS);
   } else {
-    sound = settings.soundEnabled && Date.now() - lastSoundAt >= SOUND_ONLY_GAP_MS;
+    sound = settings.soundEnabled && now - lastSoundAt >= SOUND_ONLY_GAP_MS;
   }
   if (sound) {
-    lastSoundAt = Date.now();
+    await chrome.storage.session.set({ lastSoundAt: now });
     await playChime();
   }
   await log({ emails: fresh.length, shown, sound });
@@ -72,7 +87,7 @@ async function log(entry) {
   await chrome.storage.session.set({ notifyLog: notifyLog.slice(-20) });
 }
 
-async function show(items, { update = false } = {}) {
+async function show(items, { update = false, persistent = false } = {}) {
   const single = items.length === 1 ? items[0] : null;
   const order = Object.keys(providers);
   const providerIds = [...new Set(items.map((it) => it.provider))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
@@ -83,11 +98,18 @@ async function show(items, { update = false } = {}) {
     message: single ? (single.subject || '(no subject)') : '',
     silent: true, // the extension plays its own chime (or none)
     priority: 0,
+    // Persistent: keep it until you close or click it, so Chrome itself never
+    // times it out (which would count as closed).
+    requireInteraction: persistent,
   };
   // Update in place while it is open; otherwise (or if it was closed in the
   // meantime) start a new one.
   const updated = update && (await chrome.notifications.update(NOTIFICATION_ID, options));
-  if (!updated) await chrome.notifications.create(NOTIFICATION_ID, options);
+  if (!updated) {
+    // Replacing (not updating) makes macOS show a new banner.
+    await chrome.notifications.clear(NOTIFICATION_ID);
+    await chrome.notifications.create(NOTIFICATION_ID, options);
+  }
   await chrome.storage.session.set({ notificationTarget: single ? keyOf(single) : null });
   return { title: options.title, message: options.message, icons: single ? [single.provider] : providerIds, updated: Boolean(updated) };
 }
