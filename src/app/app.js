@@ -36,11 +36,12 @@ const state = {
   selected: null, // { accountId, messageId }
   message: null, // full message currently in the reader
   showRemoteImages: false,
-  refreshing: new Set(),
-  checked: new Map(), // accountId -> Set of checked message ids
-  lastPicked: null, // { accountId, messageId } anchor for shift-click ranges
-  allUnread: new Set(), // accounts where "all unread", beyond those listed, is selected
-  progress: new Map(), // accountId -> "Marking 120 of 812…" while a bulk action runs
+  view: null, // { provider, account } filter for the list, set below
+  visibleList: [], // messages currently listed, in order
+  checked: new Set(), // "<accountId>::<messageId>" keys of ticked emails
+  lastPicked: null, // key of the last ticked email, anchor for shift-click ranges
+  allUnread: false, // "select all N unread" beyond the listed emails
+  progress: null, // "Marking 120 of 812…" while a bulk action runs
   recentOpen: new Set(), // accounts whose "Recently read" section is expanded
   recent: new Map(), // accountId -> { loading, messages, error }
 };
@@ -51,14 +52,6 @@ const reader = $('reader');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-// Collapsed accounts are a per-browser view preference.
-function loadCollapsed() {
-  try { return new Set(JSON.parse(localStorage.getItem('collapsed') ?? '[]')); } catch { return new Set(); }
-}
-const collapsed = loadCollapsed();
-function saveCollapsed() {
-  try { localStorage.setItem('collapsed', JSON.stringify([...collapsed])); } catch {}
-}
 
 // ---------- formatting ----------
 
@@ -144,105 +137,239 @@ function renderTopbar() {
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
 
-// ---------- sidebar ----------
+// ---------- sidebar: provider rail + filtered unified list ----------
+//
+// The rail on the left filters by provider ("All" or one provider); chips at
+// the top of the list narrow it to one account. The list itself is every
+// unread email in the current view, newest first, so new mail is always at
+// the top whichever account it arrived in.
 
-function renderSidebar() {
-  const accounts = visibleAccounts();
-  const hiddenCount = Object.values(state.accounts).filter((a) => a.hidden).length;
-  let html = '';
-  for (const p of Object.values(providers)) {
-    const list = accounts.filter((a) => a.provider === p.id);
-    html += `<section class="provider">
-      <div class="provider-head">
-        <span class="provider-pill ${p.id}"><span class="provider-mark">${p.name[0]}</span>${esc(p.name)}</span>
-        <span class="spacer"></span>
-        <button class="add-btn" data-action="add" data-provider="${p.id}">${icon.plus}Add account</button>
-      </div>
-      ${list.length ? list.map(renderAccount).join('') : `<div class="provider-empty">No ${esc(p.name)} accounts connected.</div>`}
-    </section>`;
+const PROVIDER_ICON = (id) => `../../icons/providers/${id}.png`;
+const pico = (id, cls = 'pico') => `<img class="${cls}" src="${PROVIDER_ICON(id)}" alt="">`;
+const keyOf = (accountId, messageId) => `${accountId}::${messageId}`;
+const splitKey = (key) => {
+  const i = key.indexOf('::');
+  return [key.slice(0, i), key.slice(i + 2)];
+};
+
+function loadView() {
+  try {
+    const v = JSON.parse(localStorage.getItem('view') ?? '{}');
+    return { provider: v.provider ?? null, account: v.account ?? null };
+  } catch {
+    return { provider: null, account: null };
   }
-  if (hiddenCount && !state.settings.showHidden) {
-    html += `<div class="sidebar-footer">${hiddenCount} hidden account${hiddenCount > 1 ? 's' : ''} · <button class="link-btn" data-action="show-hidden">Show</button></div>`;
-  }
-  const scroll = sidebar.scrollTop;
-  sidebar.innerHTML = html;
-  sidebar.scrollTop = scroll;
-  // "indeterminate" is a property only, it cannot be set from markup.
-  for (const box of sidebar.querySelectorAll('.pick-all[data-partial="true"]')) box.indeterminate = true;
+}
+function saveView() {
+  try { localStorage.setItem('view', JSON.stringify(state.view)); } catch {}
 }
 
-function renderAccount(a) {
-  const m = state.mail[a.id] ?? { messages: [], unreadCount: 0 };
-  const isCollapsed = collapsed.has(a.id);
-  const status = m.status ?? 'pending';
-  const count = m.unreadCount ?? 0;
+function setView(provider, account = null) {
+  state.view = { provider, account };
+  state.checked.clear();
+  state.allUnread = false;
+  saveView();
+  renderSidebar();
+  if (account && state.recentOpen.has(account)) loadRecent(account);
+}
 
-  let notice = '';
-  if (status === 'auth') {
-    notice = `<div class="account-notice"><span>Signed out. Showing mail as of ${ago(m.lastSuccessAt)}.</span>
-      <button class="link-btn" data-action="signin" data-account="${esc(a.id)}">Sign in</button></div>`;
-  } else if (status === 'error') {
-    notice = `<div class="account-notice" title="${esc(m.error)}"><span>Couldn't refresh: ${esc(m.error)}</span>
-      <button class="link-btn" data-action="refresh-account" data-account="${esc(a.id)}">Retry</button></div>`;
+// "New" dots: ids not yet seen when the tab was last left. Everything present
+// becomes "seen" whenever the tab is hidden, and an email is seen once opened.
+const known = (() => {
+  try {
+    const raw = localStorage.getItem('knownIds');
+    return raw ? new Set(JSON.parse(raw)) : null;
+  } catch {
+    return null;
   }
+})();
+let knownIds = known;
+function allKeys() {
+  const keys = [];
+  for (const [id, m] of Object.entries(state.mail)) for (const msg of m?.messages ?? []) keys.push(keyOf(id, msg.id));
+  return keys;
+}
+function markAllSeen() {
+  knownIds = new Set(allKeys());
+  try { localStorage.setItem('knownIds', JSON.stringify([...knownIds])); } catch {}
+}
+function markSeen(key) {
+  if (!knownIds || knownIds.has(key)) return;
+  knownIds.add(key);
+  try { localStorage.setItem('knownIds', JSON.stringify([...knownIds])); } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') markAllSeen();
+});
 
-  const messages = m.messages ?? [];
-  const checked = checkedFor(a.id, messages);
-  const aid = esc(a.id);
-  const msgs = messages
-    .map((msg) => {
-      const sel = state.selected?.accountId === a.id && state.selected?.messageId === msg.id;
-      const isChecked = checked.has(msg.id);
-      return `<li class="msg-row${sel ? ' selected' : ''}${isChecked ? ' checked' : ''}${msg.read ? ' read' : ''}">
-        <input type="checkbox" class="pick" data-action="pick" data-account="${aid}" data-message="${esc(msg.id)}" ${isChecked ? 'checked' : ''} aria-label="Select email">
-        <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}">
-          <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
-          <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
-        </button></li>`;
-    })
-    .join('');
-  const more = count > messages.length && messages.length
-    ? `<li class="stale-note">Showing the newest ${messages.length} of ${count} unread.</li>` : '';
-  const allChecked = messages.length > 0 && checked.size === messages.length;
-  if (!allChecked) state.allUnread.delete(a.id);
-  const all = state.allUnread.has(a.id);
-  const progress = state.progress.get(a.id);
-  // Gmail-style: once every listed email is ticked, offer to extend the
-  // selection to all unread mail in the inbox, including unlisted ones.
-  const label = progress
-    ? esc(progress)
-    : all ? `All ${count} unread selected`
-    : `${checked.size} selected${allChecked && count > messages.length
-      ? ` · <button class="link-btn" data-action="select-all-unread" data-account="${aid}">Select all ${count} unread</button>` : ''}`;
-  const bulkBar = checked.size
-    ? `<div class="bulk-bar"><span>${label}</span>
-        <button class="tool-btn small" data-action="bulk-read" data-account="${aid}" ${progress ? 'disabled' : ''}>${icon.mailOpen}Mark read</button>
-        <button class="link-btn" data-action="bulk-clear" data-account="${aid}" ${progress ? 'hidden' : ''}>Clear</button></div>`
-    : '';
+const liveAccounts = () =>
+  Object.values(state.accounts).sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0));
+const unreadOf = (a) => state.mail[a.id]?.unreadCount ?? 0;
+const hasProblem = (a) => ['auth', 'error'].includes(state.mail[a.id]?.status);
 
-  return `<div class="account${isCollapsed ? ' collapsed' : ''}${a.hidden ? ' is-hidden' : ''}">
-    <div class="account-head">
-      <input type="checkbox" class="pick pick-all${messages.length ? '' : ' invisible'}" data-action="pick-all" data-account="${aid}"
-        ${allChecked ? 'checked' : ''} data-partial="${checked.size > 0 && !allChecked}" title="Select all" aria-label="Select all emails in ${esc(a.email)}">
-      <button class="account-toggle" data-action="toggle" data-account="${esc(a.id)}" aria-expanded="${!isCollapsed}">
-        ${icon.chevron.replace('<svg', '<svg class="chevron"')}
-        <span class="account-email" style="--h: ${accountHue(a)}" title="${esc(a.email)}">${esc(a.email)}</span>
-        ${status === 'auth' || status === 'error' ? `<span class="status-dot ${status}" title="${status === 'auth' ? 'Sign-in needed' : 'Refresh failed'}"></span>` : ''}
-        <span class="count${count ? '' : ' zero'}">${count}</span>
-      </button>
-      <div class="menu-wrap">
-        <button class="icon-btn" data-action="account-menu" data-account="${esc(a.id)}" title="Account options" aria-label="Account options">${icon.more}</button>
-      </div>
-    </div>
-    ${notice}
-    ${bulkBar}
-    ${msgs ? `<ul class="messages">${msgs}${more}</ul>` : ''}
-    ${renderRecent(a)}
+// Accounts whose mail is in the current view.
+function viewAccounts() {
+  const { provider, account } = state.view;
+  if (account) return state.accounts[account] ? [state.accounts[account]] : [];
+  return liveAccounts().filter(
+    (a) => (!provider || a.provider === provider) && (!a.hidden || (provider && state.settings.showHidden)),
+  );
+}
+
+function viewMessages() {
+  const list = [];
+  for (const a of viewAccounts()) {
+    for (const msg of state.mail[a.id]?.messages ?? []) list.push({ ...msg, accountId: a.id, provider: a.provider, key: keyOf(a.id, msg.id) });
+  }
+  return list.sort((x, y) => (y.date ?? 0) - (x.date ?? 0));
+}
+
+function renderRail() {
+  const visible = liveAccounts().filter((a) => !a.hidden);
+  const total = visible.reduce((s, a) => s + unreadOf(a), 0);
+  const badge = (n) => (n ? `<span class="rail-badge">${n > 999 ? '999+' : n}</span>` : '');
+  const active = (p) => (state.view.provider === p && !state.view.account) || (p && state.view.provider === p) ? ' active' : '';
+  let html = `<button class="rail-btn all${!state.view.provider && !state.view.account ? ' active' : ''}" data-action="view" data-provider="" title="All accounts · ${total} unread"><span class="rail-all">All</span>${badge(total)}</button>`;
+  for (const p of Object.values(providers)) {
+    const accounts = visible.filter((a) => a.provider === p.id);
+    const n = accounts.reduce((s, a) => s + unreadOf(a), 0);
+    const problem = accounts.some(hasProblem);
+    const cls = !accounts.length ? ' none' : !n ? ' quiet' : '';
+    html += `<button class="rail-btn${cls}${active(p.id)}" data-action="view" data-provider="${p.id}" title="${esc(p.name)}${accounts.length ? ` · ${n} unread` : ' · no accounts'}">
+      ${pico(p.id, 'rail-icon')}${badge(n)}${problem ? '<span class="rail-warn"></span>' : ''}</button>`;
+  }
+  html += `<span class="rail-spacer"></span>
+    <div class="menu-wrap"><button class="rail-btn add" data-action="add-menu" title="Add account" aria-label="Add account">${icon.plus}</button></div>`;
+  return `<nav class="rail" aria-label="Providers">${html}</nav>`;
+}
+
+function renderChips() {
+  const { provider, account } = state.view;
+  const p = provider ? providers[provider] : null;
+  let pool = liveAccounts().filter((a) => (!provider || a.provider === provider) && (!a.hidden || (provider && state.settings.showHidden)));
+  // In "All", only accounts with something to see get a chip.
+  if (!provider) pool = pool.filter((a) => unreadOf(a) || hasProblem(a) || a.id === account);
+  const chip = (a) => {
+    const n = unreadOf(a);
+    return `<button class="chip${account === a.id ? ' on' : ''}${a.hidden ? ' dim' : ''}" data-action="view-account" data-account="${esc(a.id)}" title="${esc(a.email)}">
+      ${pico(a.provider)}<span class="chip-name">${esc(a.email.split('@')[0])}</span>${n ? `<span class="chip-n">${n}</span>` : ''}${hasProblem(a) ? '<span class="chip-warn"></span>' : ''}</button>`;
+  };
+  const allLabel = p ? `All ${esc(p.name)}` : 'All accounts';
+  return `<div class="chips">
+    <button class="chip${account ? '' : ' on'}" data-action="view" data-provider="${provider ?? ''}">${allLabel}</button>
+    ${pool.map(chip).join('')}
+    ${p ? `<button class="chip add" data-action="add" data-provider="${p.id}">${icon.plus}Add</button>` : ''}
   </div>`;
 }
 
-// "Recently read": the last few read inbox emails, collapsed by default and
-// fetched only when opened.
+function renderAccountBar(a) {
+  const m = state.mail[a.id] ?? {};
+  return `<div class="acct-bar">
+    ${pico(a.provider)}<span class="acct-email" title="${esc(a.email)}">${esc(a.email)}</span>
+    <span class="acct-checked">${m.lastCheckedAt ? `checked ${ago(m.lastCheckedAt)}` : ''}</span>
+    <div class="menu-wrap"><button class="icon-btn" data-action="account-menu" data-account="${esc(a.id)}" title="Account options" aria-label="Account options">${icon.more}</button></div>
+  </div>`;
+}
+
+function renderNotices(accounts) {
+  return accounts
+    .filter(hasProblem)
+    .map((a) => {
+      const m = state.mail[a.id];
+      const auth = m.status === 'auth';
+      return `<div class="notice" title="${esc(m.error ?? '')}">${pico(a.provider)}
+        <span><b>${esc(a.email)}</b> · ${auth ? `signed out, showing mail as of ${ago(m.lastSuccessAt)}` : `couldn't refresh: ${esc(m.error)}`}</span>
+        <button class="link-btn" data-action="${auth ? 'signin' : 'refresh-account'}" data-account="${esc(a.id)}">${auth ? 'Sign in' : 'Retry'}</button></div>`;
+    })
+    .join('');
+}
+
+function renderSidebar() {
+  const { provider, account } = state.view;
+  if (account && !state.accounts[account]) state.view = { provider, account: null };
+  const accounts = viewAccounts();
+  const messages = viewMessages();
+  state.visibleList = messages;
+  const present = new Set(messages.map((m) => m.key));
+  for (const k of state.checked) if (!present.has(k)) state.checked.delete(k);
+  if (!knownIds && Object.keys(state.mail).length) markAllSeen();
+
+  const unreadTotal = accounts.reduce((s, a) => s + unreadOf(a), 0);
+  const checked = state.checked;
+  const allListed = messages.length > 0 && checked.size === messages.length;
+  if (!allListed) state.allUnread = false;
+  const selecting = checked.size > 0;
+
+  let head = '';
+  if (messages.length) {
+    let label;
+    if (state.progress) label = esc(state.progress);
+    else if (!selecting) label = `${unreadTotal} unread`;
+    else if (state.allUnread) label = `All ${unreadTotal} unread selected`;
+    else label = `${checked.size} selected${allListed && unreadTotal > messages.length
+      ? ` · <button class="link-btn" data-action="select-all-unread">Select all ${unreadTotal}</button>` : ''}`;
+    head = `<div class="list-head">
+      <input type="checkbox" class="pick pick-all" data-action="pick-all" ${allListed ? 'checked' : ''} aria-label="Select all">
+      <span class="list-label">${label}</span>
+      ${selecting ? `<button class="tool-btn small" data-action="bulk-read" ${state.progress ? 'disabled' : ''}>${icon.mailOpen}Mark read</button>
+        <button class="link-btn" data-action="bulk-clear" ${state.progress ? 'hidden' : ''}>Clear</button>` : ''}
+    </div>`;
+  }
+
+  const multi = !account && accounts.length > 1;
+  const rows = messages.map((msg) => {
+    const sel = state.selected?.accountId === msg.accountId && state.selected?.messageId === msg.id;
+    const isNew = knownIds && !knownIds.has(msg.key) && !msg.read;
+    const acct = state.accounts[msg.accountId];
+    return `<li class="msg-row${sel ? ' selected' : ''}${checked.has(msg.key) ? ' checked' : ''}${msg.read ? ' read' : ''}">
+      <span class="lead">${pico(msg.provider)}<input type="checkbox" class="pick" data-action="pick" data-key="${esc(msg.key)}" ${checked.has(msg.key) ? 'checked' : ''} aria-label="Select email"></span>
+      <button class="msg" data-action="open" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}">
+        <span class="msg-from">${esc(displayName(msg.from))}${isNew ? '<span class="new-dot" title="New"></span>' : ''}</span><span class="msg-time">${shortTime(msg.date)}</span>
+        <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
+        ${multi ? `<span class="msg-acct">${esc(acct?.email ?? '')}</span>` : ''}
+      </button></li>`;
+  }).join('');
+
+  const listed = accounts.reduce((s, a) => s + (state.mail[a.id]?.messages?.length ?? 0), 0);
+  const more = unreadTotal > listed && listed
+    ? `<div class="list-note">Showing the newest ${listed} of ${unreadTotal} unread${multi ? ' (up to 30 per account)' : ''}.</div>` : '';
+
+  let empty = '';
+  if (!messages.length) {
+    const p = provider ? providers[provider] : null;
+    if (p && !liveAccounts().some((a) => a.provider === p.id)) {
+      empty = `<div class="empty">No ${esc(p.name)} accounts yet.<br><button class="tool-btn" data-action="add" data-provider="${p.id}">${icon.plus}Add ${esc(p.name)} account</button></div>`;
+    } else if (!Object.keys(state.accounts).length) {
+      empty = `<div class="empty">No accounts yet. Use <b>+</b> in the left rail to add one.</div>`;
+    } else {
+      empty = `<div class="empty">${icon.mail}<div>All caught up</div></div>`;
+    }
+  }
+
+  const hiddenCount = Object.values(state.accounts).filter((a) => a.hidden).length;
+  const footer = hiddenCount && !provider && !account
+    ? `<div class="list-note">${hiddenCount} hidden account${hiddenCount > 1 ? 's' : ''} not shown · <button class="link-btn" data-action="show-hidden">Show in provider views</button></div>` : '';
+
+  const listEl = sidebar.querySelector('.pane');
+  const scroll = listEl?.scrollTop ?? 0;
+  sidebar.innerHTML = `${renderRail()}
+    <div class="pane${selecting ? ' selecting' : ''}">
+      ${renderChips()}
+      ${account ? renderAccountBar(state.accounts[account]) : ''}
+      ${renderNotices(accounts)}
+      ${head}
+      ${rows ? `<ul class="messages">${rows}</ul>` : ''}
+      ${more}${empty}
+      ${account ? renderRecent(state.accounts[account]) : ''}
+      ${footer}
+    </div>`;
+  sidebar.querySelector('.pane').scrollTop = scroll;
+  const all = sidebar.querySelector('.pick-all');
+  if (all) all.indeterminate = selecting && !allListed;
+}
+
+// "Recently read": the last few read inbox emails of one account, collapsed by
+// default and fetched only when opened.
 const RECENT_LIMIT = 10;
 
 function renderRecent(a) {
@@ -257,8 +384,8 @@ function renderRecent(a) {
     else {
       body = r.messages.map((msg) => {
         const sel = state.selected?.accountId === a.id && state.selected?.messageId === msg.id;
-        return `<li class="msg-row read recent${sel ? ' selected' : ''}">
-          <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}" data-recent="1">
+        return `<li class="msg-row read recent${sel ? ' selected' : ''}"><span class="lead"></span>
+          <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}">
             <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
             <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
           </button></li>`;
@@ -286,83 +413,85 @@ async function loadRecent(id) {
   renderSidebar();
 }
 
-// Checked (multi-select) emails per account. Ids that no longer exist in the
-// list, e.g. after a refresh, are dropped.
-function checkedFor(id, messages) {
-  const set = state.checked.get(id);
-  if (!set) return new Set();
-  const present = new Set(messages.map((x) => x.id));
-  for (const mid of set) if (!present.has(mid)) set.delete(mid);
-  return set;
-}
-
-function toggleChecked(id, messageId, on, { range = false } = {}) {
-  const messages = state.mail[id]?.messages ?? [];
-  const set = state.checked.get(id) ?? new Set();
-  state.checked.set(id, set);
-  const idx = messages.findIndex((x) => x.id === messageId);
-  const anchor = state.lastPicked?.accountId === id ? messages.findIndex((x) => x.id === state.lastPicked.messageId) : -1;
+function toggleChecked(key, on, { range = false } = {}) {
+  const list = state.visibleList.map((m) => m.key);
+  const idx = list.indexOf(key);
+  const anchor = state.lastPicked ? list.indexOf(state.lastPicked) : -1;
   // Shift-click selects the whole range from the previously clicked email.
-  const ids = range && anchor !== -1 && idx !== -1
-    ? messages.slice(Math.min(anchor, idx), Math.max(anchor, idx) + 1).map((x) => x.id)
-    : [messageId];
-  for (const mid of ids) on ? set.add(mid) : set.delete(mid);
-  state.lastPicked = { accountId: id, messageId };
+  const keys = range && anchor !== -1 && idx !== -1 ? list.slice(Math.min(anchor, idx), Math.max(anchor, idx) + 1) : [key];
+  for (const k of keys) on ? state.checked.add(k) : state.checked.delete(k);
+  state.lastPicked = key;
 }
 
-// Distinct pill colours per account, assigned in the order accounts were added
-// so each keeps its colour. Red and blue are left to the Gmail/Outlook pills.
-const ACCOUNT_HUES = [174, 262, 36, 330, 145, 20, 290, 55, 195, 0];
-function accountHue(a) {
-  const order = Object.values(state.accounts).sort((x, y) => (x.addedAt ?? 0) - (y.addedAt ?? 0));
-  return ACCOUNT_HUES[Math.max(0, order.findIndex((x) => x.id === a.id)) % ACCOUNT_HUES.length];
-}
-
-async function markAllUnreadRead(id) {
-  const a = state.accounts[id];
+// Marks the selection read, one request per account. With "select all N
+// unread", accounts with more unread mail than listed are marked in full.
+async function bulkMarkRead() {
+  const byAccount = new Map();
+  for (const key of state.checked) {
+    const [id, mid] = splitKey(key);
+    if (!byAccount.has(id)) byAccount.set(id, []);
+    byAccount.get(id).push(mid);
+  }
+  const accountIds = state.allUnread ? viewAccounts().filter((a) => unreadOf(a)).map((a) => a.id) : [...byAccount.keys()];
   const setProgress = (text) => {
-    text ? state.progress.set(id, text) : state.progress.delete(id);
+    state.progress = text;
     renderSidebar();
   };
-  setProgress('Finding unread emails…');
+  let done = 0;
+  let failedTotal = 0;
   try {
-    const { total, failed } = await providers[a.provider].markAllRead(a, (done, n) => setProgress(`Marking ${done} of ${n}…`));
-    state.allUnread.delete(id);
-    state.checked.delete(id);
-    if (state.message?.accountId === id && !failed.includes(state.message.id)) {
-      state.message.isRead = true;
-      renderReaderToolbar();
+    for (const [n, id] of accountIds.entries()) {
+      const a = state.accounts[id];
+      const ids = byAccount.get(id) ?? [];
+      const step = accountIds.length > 1 ? ` (account ${n + 1} of ${accountIds.length})` : '';
+      if (state.allUnread && unreadOf(a) > (state.mail[id]?.messages?.length ?? 0)) {
+        setProgress(`Finding unread emails…${step}`);
+        const { total, failed } = await providers[a.provider].markAllRead(a, (d, t) => setProgress(`Marking ${d} of ${t}…${step}`));
+        done += total - failed.length;
+        failedTotal += failed.length;
+        await refreshOne(id);
+        continue;
+      }
+      setProgress(`Marking ${ids.length}…${step}`);
+      const failed = new Set(await providers[a.provider].setReadMany(a, ids, true));
+      const ok = new Set(ids.filter((x) => !failed.has(x)));
+      done += ok.size;
+      failedTotal += failed.size;
+      const m = await getMail(id);
+      if (m) {
+        const dropped = (m.messages ?? []).filter((x) => ok.has(x.id));
+        await patchMail(id, {
+          messages: (m.messages ?? []).filter((x) => !ok.has(x.id)),
+          unreadCount: Math.max(0, (m.unreadCount ?? 0) - dropped.filter((x) => !x.read).length),
+        });
+      }
+      for (const mid of ok) state.checked.delete(keyOf(id, mid));
+      if (state.message?.accountId === id && ok.has(state.message.id)) {
+        state.message.isRead = true;
+        renderReaderToolbar();
+      }
     }
-    if (failed.length) toast(`${failed.length} of ${total} couldn't be marked as read.`, { error: true });
-    else toast(`Marked all ${total} as read`);
   } finally {
+    state.allUnread = false;
     setProgress(null);
-    await refreshOne(id);
   }
+  if (failedTotal) toast(`${failedTotal} couldn't be marked as read. They are still selected.`, { error: true });
+  else {
+    state.checked.clear();
+    toast(`Marked ${done} as read`);
+  }
+  renderSidebar();
 }
 
-async function bulkMarkRead(id) {
-  if (state.allUnread.has(id)) return markAllUnreadRead(id);
-  const a = state.accounts[id];
-  const ids = [...(state.checked.get(id) ?? [])];
-  if (!ids.length) return;
-  const failed = new Set(await providers[a.provider].setReadMany(a, ids, true));
-  const done = new Set(ids.filter((x) => !failed.has(x)));
-  const m = await getMail(id);
-  if (m) {
-    const dropped = (m.messages ?? []).filter((x) => done.has(x.id));
-    await patchMail(id, {
-      messages: (m.messages ?? []).filter((x) => !done.has(x.id)),
-      unreadCount: Math.max(0, (m.unreadCount ?? 0) - dropped.filter((x) => !x.read).length),
-    });
-  }
-  state.checked.set(id, failed);
-  if (state.message && done.has(state.message.id)) {
-    state.message.isRead = true;
-    renderReaderToolbar();
-  }
-  if (failed.size) toast(`${failed.size} of ${ids.length} couldn't be marked as read. They are still selected.`, { error: true });
-  else toast(`Marked ${done.size} as read`);
+function openAddMenu(button) {
+  closeMenus();
+  const menu = document.createElement('div');
+  menu.className = 'menu add-menu';
+  menu.dataset.floating = '1';
+  menu.innerHTML = Object.values(providers)
+    .map((p) => `<button class="menu-item" data-action="add" data-provider="${p.id}">${pico(p.id)}${esc(p.name)}</button>`)
+    .join('');
+  button.parentElement.appendChild(menu);
 }
 
 function openAccountMenu(button, id) {
@@ -400,8 +529,7 @@ async function addAccount(providerId, loginHint) {
     } else {
       toast(`${email} connected`);
     }
-    collapsed.delete(id);
-    saveCollapsed();
+    setView(providerId, id);
     await refreshOne(id);
   } catch (e) {
     if (/did not approve|canceled|cancelled|user closed/i.test(e.message)) return;
@@ -441,8 +569,7 @@ async function submitImapDialog(e) {
     await upsertAccount({ id, provider: provider.id, email, hidden: false, addedAt: Date.now() });
     $('imapDialog').close();
     toast(`${email} connected`);
-    collapsed.delete(id);
-    saveCollapsed();
+    setView(provider.id, id);
     await refreshOne(id);
   } catch (err) {
     $('imapError').textContent = err.name === 'AuthRequiredError'
@@ -513,15 +640,16 @@ async function trashMessage(id, messageId) {
   // unread email that was just opened). Move on to its neighbour in the list
   // it was opened from.
   const recent = state.recent.get(id);
-  const unreadList = state.mail[id]?.messages ?? [];
-  const list = unreadList.some((m) => m.id === messageId) ? unreadList : recent?.messages ?? [];
-  const idx = list.findIndex((m) => m.id === messageId);
+  const key = keyOf(id, messageId);
+  const inList = state.visibleList.some((m) => m.key === key);
+  const list = inList ? state.visibleList : (recent?.messages ?? []).map((m) => ({ ...m, accountId: id }));
+  const idx = list.findIndex((m) => m.accountId === id && m.id === messageId);
   const next = idx === -1 ? null : list[idx + 1] ?? list[idx - 1];
   await providers[a.provider].trash(a, messageId);
   if (recent) recent.messages = recent.messages.filter((m) => m.id !== messageId);
   await updateCachedMessage(id, messageId, (msg) => ({ message: null, unreadDelta: msg.read ? 0 : -1 }));
   toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
-  if (next) openMessage(id, next.id);
+  if (next) openMessage(next.accountId, next.id);
   else {
     state.selected = null;
     state.message = null;
@@ -543,6 +671,7 @@ async function openMessage(id, messageId) {
   state.selected = { accountId: id, messageId };
   state.message = null;
   state.showRemoteImages = false;
+  markSeen(keyOf(id, messageId));
   renderSidebar();
   reader.innerHTML = `<div class="reader-status">Loading…</div>`;
 
@@ -669,10 +798,13 @@ document.addEventListener('click', async (e) => {
   switch (action) {
     case 'add':
       return addAccount(el.dataset.provider);
-    case 'toggle':
-      collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id);
-      saveCollapsed();
-      return renderSidebar();
+    case 'add-menu':
+      e.stopPropagation();
+      return openAddMenu(el);
+    case 'view':
+      return setView(el.dataset.provider || null);
+    case 'view-account':
+      return setView(state.view.provider, id);
     case 'toggle-recent':
       if (state.recentOpen.has(id)) {
         state.recentOpen.delete(id);
@@ -681,23 +813,20 @@ document.addEventListener('click', async (e) => {
       state.recentOpen.add(id);
       return loadRecent(id);
     case 'pick':
-      toggleChecked(id, messageId, el.checked, { range: e.shiftKey });
+      toggleChecked(el.dataset.key, el.checked, { range: e.shiftKey });
       return renderSidebar();
-    case 'pick-all': {
-      const ids = (state.mail[id]?.messages ?? []).map((x) => x.id);
-      state.checked.set(id, new Set(el.checked ? ids : []));
+    case 'pick-all':
+      state.checked = new Set(el.checked ? state.visibleList.map((m) => m.key) : []);
       return renderSidebar();
-    }
     case 'select-all-unread':
-      state.allUnread.add(id);
+      state.allUnread = true;
       return renderSidebar();
     case 'bulk-clear':
-      state.checked.delete(id);
-      state.allUnread.delete(id);
+      state.checked.clear();
+      state.allUnread = false;
       return renderSidebar();
     case 'bulk-read':
-      await withBusy(el, () => bulkMarkRead(id));
-      return renderSidebar();
+      return withBusy(el, bulkMarkRead);
     case 'account-menu':
       e.stopPropagation();
       return openAccountMenu(el, id);
@@ -780,6 +909,7 @@ $('clientIdsForm').addEventListener('submit', async (e) => {
 // Keep "Checked N min ago" current.
 setInterval(renderTopbar, 30000);
 
+state.view = loadView();
 await load();
 await fillClientIds();
 renderTopbar();

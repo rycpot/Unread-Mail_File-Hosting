@@ -14,33 +14,37 @@ Any number of accounts per provider.
 ## Layout
 
 ```
-┌──────────── 35% ─────────────┬──────────────── 65% ────────────────┐
-│ GMAIL             + Add      │ [Mark read] [Delete]   [Open in …]  │
-│ ▾ me@gmail.com           3   │ Subject                              │
-│    Sender · subject · time   │ From / To / Date                     │
-│ ▾ work@gmail.com  ●      1   │ ─────────────────────────────────── │
-│    Signed out · Sign in      │                                      │
-│    (last known mail stays)   │   email body (sandboxed)             │
-│ OUTLOOK           + Add      │                                      │
-│ ▸ me@hotmail.com         2   │                                      │
-└──────────────────────────────┴──────────────────────────────────────┘
+┌rail┬──────── list (35%) ────────┬──────────── reader (65%) ────────────┐
+│All4│ (All accounts)(anna·1)(…)  │ [Mark read] [Delete]    [Open in …]  │
+│ G 1│ ☐ 4 unread                 │ Subject                               │
+│ O  │ i  Apple ●         11:52   │ From / To / Date                      │
+│ i 2│    Your receipt from Apple │ ───────────────────────────────────── │
+│ Y 1│    anna@icloud.com         │                                       │
+│ A  │ G  Yahoo           11:40   │   email body (sandboxed)              │
+│    │    …                       │                                       │
+│ +  │                            │                                       │
+└────┴────────────────────────────┴───────────────────────────────────────┘
 ```
 
-- Accounts are grouped by provider, with their unread emails listed under each account
-  (sender, time and subject; accounts with no unread mail show only their header).
-- Tick emails, or use an account's select-all box, then **Mark read** to clear them
-  in one request. Shift-click ticks a range. When an account has more unread mail
-  than is listed, **Select all N unread** extends the selection to every unread
-  inbox email.
-- Providers are shown as coloured pills, and each account's address as a pill in
-  its own colour.
+- **Provider rail:** "All" plus one icon per provider, each with its unread count.
+  Providers with nothing unread are faded; one with a signed-out account shows an
+  amber dot. **+** at the bottom adds an account.
+- **One list, newest first:** every unread email in the current view, whichever
+  account it arrived in, with a blue dot on emails that came in since you last left
+  the tab. Chips at the top narrow the list to one account (in "All", only accounts
+  with unread mail or a problem get a chip).
+- **Account view** (click a chip): the account's address, its ⋯ menu (refresh, sign
+  in again, hide, remove) and **Recently read**, which loads the last 10 read inbox
+  emails on demand.
+- **Selecting:** hovering a row turns its provider icon into a checkbox. Tick emails
+  (shift-click for a range) or use the select-all box, then **Mark read**; this works
+  across accounts. When more unread mail exists than is listed, **Select all N**
+  extends it to every unread inbox email in the view.
 - Accounts never disappear on their own. If one signs out or fails to refresh, it
   shows a notice and keeps its last known emails. Only **⋯ → Remove account**
   deletes one.
 - **⋯ → Hide** hides an account and leaves it out of the badge count. You can
   still reach it through *Settings → Show hidden accounts*.
-- **Recently read** under each account (collapsed by default) loads the last 10
-  read inbox emails on demand, so they can be reopened, marked unread or deleted.
 - The toolbar badge shows the total unread count across visible accounts.
 
 ## Setup
@@ -76,6 +80,7 @@ src/native.js            native messaging client for the helper
 helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
 src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0)
+icons/providers/         provider icons used in the rail and list
 ```
 
 Each provider adapter implements `identify`, `fetchSummary`, `getMessage`,
