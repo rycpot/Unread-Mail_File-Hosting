@@ -268,7 +268,8 @@ button { font: inherit; color: inherit; }
   flex: none;
   display: flex;
   flex-direction: column;
-  max-height: 60%;
+  /* Open sections show in full, leaving at least a strip of the unread list. */
+  max-height: calc(100% - 140px);
   border-top: 1px solid var(--border);
   background: var(--surface);
   box-shadow: 0 -6px 14px -8px rgba(15, 23, 42, 0.18);
@@ -276,7 +277,7 @@ button { font: inherit; color: inherit; }
 }
 .dock .recent-block { display: flex; flex-direction: column; min-height: 0; padding: 0; }
 .dock .recent-block + .recent-block { border-top: 1px solid var(--border); }
-.dock .recent-list { flex: 0 1 auto; min-height: 0; max-height: 30vh; overflow-y: auto; margin: 0; border-bottom: 1px solid var(--border); }
+.dock .recent-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; margin: 0; border-bottom: 1px solid var(--border); }
 .dock .recent-toggle { margin: 4px 0 4px 12px; }
 
 .chips {

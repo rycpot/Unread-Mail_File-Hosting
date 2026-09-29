@@ -395,6 +395,7 @@ function renderSidebar() {
     const el = sidebar.querySelector(`[data-scroll="${name}"]`);
     if (el) el.scrollTop = top;
   }
+  saveSectionCache();
   const all = sidebar.querySelector('.pick-all');
   if (all) all.indeterminate = selecting && !allListed;
 }
@@ -456,12 +457,21 @@ function renderSection(kind, key) {
   </div>`;
 }
 
+// Shows the last list at once (if there is one) and refreshes it from the
+// servers behind it; only a section never loaded before shows "Loading…".
+const sectionSeq = new Map(); // "<kind>/<key>" -> latest load, so older ones are dropped
+
 async function loadSection(kind, key) {
   const accounts = sectionAccounts(key);
-  state.sections[kind].set(key, { loading: true, messages: [] });
+  const id = `${kind}/${key}`;
+  const seq = (sectionSeq.get(id) ?? 0) + 1;
+  sectionSeq.set(id, seq);
+  const cached = state.sections[kind].get(key);
+  if (!cached || cached.loading) state.sections[kind].set(key, { loading: true, messages: [] });
   renderSidebar();
   const results = await Promise.allSettled(accounts.map(async (a) =>
     (await SECTION[kind].fetch(providers[a.provider], a)).map((m) => ({ ...m, accountId: a.id }))));
+  if (sectionSeq.get(id) !== seq) return;
   const messages = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])).sort((x, y) => y.date - x.date);
   const errors = results.flatMap((r, i) => {
     if (r.status === 'fulfilled') return [];
@@ -470,6 +480,28 @@ async function loadSection(kind, key) {
   });
   state.sections[kind].set(key, { messages: SECTION[kind].limit ? messages.slice(0, SECTION[kind].limit) : messages, errors });
   renderSidebar();
+}
+
+// The section lists are kept in chrome.storage.session (memory only, cleared
+// when Chrome quits), so they also show at once after the tab is reopened.
+let cacheTimer;
+function saveSectionCache() {
+  clearTimeout(cacheTimer);
+  cacheTimer = setTimeout(() => {
+    const plain = (map) => Object.fromEntries([...map].filter(([, r]) => !r.loading).map(([k, r]) => [k, { messages: r.messages }]));
+    chrome.storage.session.set({ sectionCache: { recent: plain(state.sections.recent), spam: plain(state.sections.spam) } }).catch(() => {});
+  }, 500);
+}
+
+async function restoreSectionCache() {
+  try {
+    const { sectionCache } = await chrome.storage.session.get('sectionCache');
+    for (const kind of ['recent', 'spam']) {
+      for (const [key, r] of Object.entries(sectionCache?.[kind] ?? {})) state.sections[kind].set(key, r);
+    }
+  } catch {
+    // no cache: sections load when opened
+  }
 }
 
 function reloadOpenSections() {
@@ -1209,6 +1241,7 @@ $('clientIdsForm').addEventListener('submit', async (e) => {
 setInterval(renderTopbar, 30000);
 
 state.view = loadView();
+await restoreSectionCache();
 await load();
 await fillClientIds();
 renderTopbar();
