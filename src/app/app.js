@@ -394,8 +394,9 @@ function renderSidebar() {
 
 // "Recently read" (the last few read inbox emails) and "Spam" (unread spam
 // only) sections, collapsed by default and fetched only when opened. They are
-// shown for one account in its view, and combined for all visible accounts
-// under All accounts (key "*"). The spam count comes from the regular checks.
+// shown for one account in its view, and combined in the "All" views: for all
+// visible accounts (key "*") or all of one provider's (key "p:<provider>").
+// The spam count comes from the regular checks.
 const RECENT_LIMIT = 10;
 const SPAM_LIMIT = 20;
 const SECTION = {
@@ -403,11 +404,14 @@ const SECTION = {
   spam: { title: 'Spam', empty: 'No unread spam.', fetch: (p, a) => p.fetchSpam(a, SPAM_LIMIT), folder: 'spam' },
 };
 
-// The section key for the current view: the account, "*" under All
-// accounts, none in a provider's all-accounts view.
-const sectionKey = () => state.view.account ?? (state.view.provider ? null : '*');
-const sectionAccounts = (key) =>
-  key === '*' ? liveAccounts().filter((a) => !a.hidden) : [state.accounts[key]].filter(Boolean);
+// The section key for the current view.
+const sectionKey = () => state.view.account ?? (state.view.provider ? `p:${state.view.provider}` : '*');
+const isCombined = (key) => key === '*' || key.startsWith('p:');
+function sectionAccounts(key) {
+  if (key === '*') return liveAccounts().filter((a) => !a.hidden);
+  if (key.startsWith('p:')) return liveAccounts().filter((a) => !a.hidden && a.provider === key.slice(2));
+  return [state.accounts[key]].filter(Boolean);
+}
 
 const isSelected = (accountId, messageId, folder) =>
   state.selected?.accountId === accountId && state.selected?.messageId === messageId && state.selected?.folder === folder;
@@ -418,7 +422,7 @@ function sectionRows(kind, key) {
   if (!r || r.loading) return '<li class="recent-note">Loading…</li>';
   const notes = (r.errors ?? []).map((e) => `<li class="recent-note error">${esc(e)}</li>`).join('');
   if (!r.messages.length) return notes || `<li class="recent-note">${empty}</li>`;
-  const combined = key === '*';
+  const combined = isCombined(key);
   return r.messages.map((msg) => {
     const acct = state.accounts[msg.accountId];
     return `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(msg.accountId, msg.id, folder) ? ' selected' : ''}">
