@@ -8,9 +8,9 @@ Trash or Deleted Items), without opening the webmail site.
 - **iCloud, Yahoo and AOL** via IMAP, through a small local helper (Chrome
   native messaging) with app-specific passwords kept in the macOS Keychain.
 - **Proton** (free plan) through the mail.proton.me session signed in in Chrome:
-  unread list, mark read/unread, delete and Recently read. Bodies are end-to-end
-  encrypted, so they are read from a background Proton Mail tab after Proton has
-  decrypted them; the extension never handles Proton keys.
+  unread list, mark read/unread, delete and Recently read. Bodies and attachments
+  are end-to-end encrypted and are decrypted inside the extension with OpenPGP.js,
+  with no Proton tab opened.
 
 Any number of accounts per provider.
 
@@ -63,7 +63,7 @@ load the folder unpacked.
 | Gmail | Scope `gmail.modify`. The unread count comes from `labels/INBOX`. The list is `INBOX` + `UNREAD` messages. Delete means `messages.trash`. |
 | Outlook | Scope `Mail.ReadWrite`. The unread count comes from `mailFolders/inbox`. Delete moves the message to `deleteditems`. |
 | iCloud / Yahoo / AOL | IMAP via `helper/unread_mail_imap.py`. Listing uses `EXAMINE` (read-only) and `SEARCH UNSEEN`, fetching only From/Subject/Date of the newest 30; bodies use `BODY.PEEK[]` on click; delete is `UID MOVE` to the Trash folder. |
-| Proton | Private web-app API on `mail.proton.me/api` with the session's `AUTH-<UID>` cookie, `x-pm-uid` and a current `x-pm-appversion` (from `/assets/version.json`); a declarativeNetRequest rule sets `Origin`/`Referer` to mail.proton.me. Inbox is label `0`, delete moves to Trash (label `3`). An expired session is renewed with the refresh cookie once. Bodies: a background mail.proton.me tab opens the email and `src/content/proton-reader.js` copies the body Proton rendered (embedded images as data: URLs); the tab is reused and closed after 3 idle minutes. |
+| Proton | Private web-app API on `mail.proton.me/api` with the session's `AUTH-<UID>` cookie, `x-pm-uid` and a current `x-pm-appversion` (from `/assets/version.json`); a declarativeNetRequest rule sets `Origin`/`Referer` to mail.proton.me. Inbox is label `0`, delete moves to Trash (label `3`). An expired session is renewed with the refresh cookie once. Decryption follows Proton's open-source web client: a content script passes on Proton's persisted-session entry (`ps-<localID>` in mail.proton.me's localStorage, AES-GCM encrypted); it is unlocked with the ClientKey the server gives the signed-in session (`auth/v4/sessions/local/key`), yielding the key password that unlocks the user keys; address keys are unlocked via their signed Token. Bodies (HTML, text or PGP/MIME) and attachments (KeyPackets + data) are then OpenPGP-decrypted. Unlocked keys stay in the app tab's memory only. |
 | Sign-in | `chrome.identity.launchWebAuthFlow`, so several accounts per provider are supported. Google uses the token flow; Microsoft uses auth code + PKCE. Renewal is silent: a refresh token (Microsoft), then `prompt=none` + `login_hint`. |
 | Polling | A `chrome.alarms` alarm, every 1 to 15 minutes (set in Settings). State lives in `chrome.storage.local`. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
@@ -81,12 +81,13 @@ src/providers/gmail.js   Gmail API adapter
 src/providers/outlook.js Microsoft Graph adapter
 src/providers/imap.js    iCloud / Yahoo / AOL adapter (talks to the helper)
 src/providers/proton.js  Proton adapter (signed-in web session)
-src/providers/proton-tab.js  background Proton tab used to read decrypted bodies
-src/content/proton-reader.js content script on mail.proton.me that copies a rendered body
+src/providers/proton-crypto.js  Proton key unlocking and message/attachment decryption
+src/content/proton-session.js  passes Proton's encrypted persisted-session entry to the extension
 src/native.js            native messaging client for the helper
 helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
-src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0)
+src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0), OpenPGP.js 6.3.2 (LGPL-3.0),
+                         postal-mime 4.0.0 (MIT-0)
 icons/providers/         provider icons used in the rail and list
 ```
 

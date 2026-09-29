@@ -10,13 +10,12 @@
 //     mail.proton.me/assets/version.json (and refreshed when Proton rejects it).
 //
 // Message metadata (sender, subject, time, read state, labels) is readable
-// directly. Bodies are end-to-end encrypted: they are read from a Proton Mail
-// tab after Proton has decrypted them (see proton-tab.js), so no keys are ever
-// handled here. If that fails, the reader falls back to "Open in Proton".
+// directly. Bodies and attachments are end-to-end encrypted and are decrypted
+// in the extension (see proton-crypto.js), with no Proton tab involved.
 
 import { AuthRequiredError } from '../auth.js';
 import { ApiError } from '../http.js';
-import { readInProtonTab } from './proton-tab.js';
+import { ProtonSessionMissing, decryptAttachment, decryptMessage, getAddressKeys } from './proton-crypto.js';
 
 const ORIGIN = 'https://mail.proton.me';
 const API = `${ORIGIN}/api`;
@@ -70,7 +69,11 @@ async function appVersion({ refresh = false } = {}) {
   } catch (e) {
     console.warn('[proton] could not read version.json', e);
   }
-  return cached?.version ?? FALLBACK_VERSION;
+  // Keep using the last known version and try again in 10 minutes rather than
+  // on every request.
+  const version = cached?.version ?? FALLBACK_VERSION;
+  await chrome.storage.local.set({ [VERSION_KEY]: { version, at: Date.now() - 24 * 3600e3 + 10 * 60e3 } });
+  return version;
 }
 
 // UIDs of every Proton session signed in on mail.proton.me in this profile.
@@ -79,7 +82,7 @@ async function sessionUids() {
   return [...new Set(cookies.filter((c) => c.name.startsWith('AUTH-')).map((c) => c.name.slice(5)))];
 }
 
-async function rawCall(uid, path, { method = 'GET', body, retry = true } = {}) {
+async function rawCall(uid, path, { method = 'GET', body, retry = true, binary = false } = {}) {
   await ensureProtonHeaderRule();
   const res = await fetch(`${API}/${path}`, {
     method,
@@ -92,11 +95,12 @@ async function rawCall(uid, path, { method = 'GET', body, retry = true } = {}) {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+  if (binary && res.ok) return res.arrayBuffer();
   const json = await res.json().catch(() => ({}));
   // 5003/5005: this app version is no longer accepted; fetch the current one.
   if ((json.Code === 5003 || json.Code === 5005) && retry) {
     await appVersion({ refresh: true });
-    return rawCall(uid, path, { method, body, retry: false });
+    return rawCall(uid, path, { method, body, retry: false, binary });
   }
   if (res.status === 401) throw new AuthRequiredError('Proton session expired');
   if (!res.ok || (json.Code && json.Code !== 1000 && json.Code !== 1001)) {
@@ -219,6 +223,7 @@ export const proton = {
 
   async getMessage(account, id) {
     const { Message: m } = await call(account, `mail/v4/messages/${encodeURIComponent(id)}`);
+    const localID = (await chrome.storage.local.get('protonSessions')).protonSessions?.[account.uid]?.localID ?? 0;
     const base = {
       id: m.ID,
       subject: m.Subject ?? '',
@@ -227,19 +232,30 @@ export const proton = {
       cc: (m.CCList ?? []).map(addr),
       date: (m.Time ?? 0) * 1000,
       isRead: !m.Unread,
-      attachments: [],
       numAttachments: m.NumAttachments ?? 0,
-      webUrl: `${ORIGIN}/u/0/inbox/${encodeURIComponent(m.ID)}`,
+      webUrl: `${ORIGIN}/u/${localID}/inbox/${encodeURIComponent(m.ID)}`,
     };
     try {
-      const shown = await readInProtonTab(m.ID, m.ConversationID);
-      // Proton marks an email read when it opens it; the app restores the
-      // unread state if "Mark as read when opened" is off.
-      return { ...base, html: shown.html, text: null, openedInProton: true, externalAttachments: shown.attachments ?? [] };
+      const keys = await getAddressKeys(account, (path, opts) => call(account, path, opts));
+      return { ...base, ...(await decryptMessage(m, keys)) };
     } catch (e) {
-      console.warn('[proton] reading from the Proton tab failed:', e);
-      return { ...base, encrypted: true, html: null, text: null, readError: e.message };
+      console.warn('[proton] decryption failed:', e);
+      return {
+        ...base,
+        encrypted: true,
+        html: null,
+        text: null,
+        attachments: [],
+        readError: e instanceof ProtonSessionMissing ? e.message : `Could not decrypt: ${e.message}`,
+      };
     }
+  },
+
+  async getAttachment(account, messageId, attachment) {
+    if (attachment.data) return Uint8Array.from(atob(attachment.data), (c) => c.charCodeAt(0));
+    const keys = await getAddressKeys(account, (path, opts) => call(account, path, opts));
+    const encrypted = await call(account, `mail/v4/attachments/${encodeURIComponent(attachment.id)}`, { binary: true });
+    return decryptAttachment(attachment.keyPackets, encrypted, keys);
   },
 
   async setRead(account, id, read) {

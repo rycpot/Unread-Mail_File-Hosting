@@ -39,7 +39,7 @@
         "https://mail.proton.me/*"
       ],
       "js": [
-        "src/content/proton-reader.js"
+        "src/content/proton-session.js"
       ],
       "run_at": "document_idle"
     }

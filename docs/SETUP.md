@@ -153,15 +153,19 @@ signed in to in this Chrome profile.
 What works: unread count and list, mark read/unread (one, several or all), delete
 (moves to Trash) and Recently read.
 
-**Reading emails:** Proton encrypts bodies end-to-end, and only Proton's own page
-can decrypt them. When you open a Proton email, the extension opens it in a
-**background Proton Mail tab** (not focused), copies the body Proton displays and
-shows it in the reader. The tab is reused for the next email and closes itself
-after 3 minutes without use. Attachments are listed and download in Proton. If
-reading fails, the reader offers **Open in Proton**.
+**Reading emails:** Proton encrypts bodies end-to-end. The extension decrypts them
+itself, the same way Proton's web app does, without opening any Proton tab:
 
-Proton marks an email read when its tab opens it; if *Mark as read when opened* is
-off in Settings, the extension sets it back to unread.
+- While mail.proton.me is open, a small script passes the extension Proton's saved
+  session entry. It is still encrypted; only the Proton server can unlock it, and
+  only for your signed-in session. So **open mail.proton.me once** after connecting
+  (and again if you sign out and in), with **Keep me signed in** on.
+- When you open an email, the extension unlocks your Proton keys in the app tab's
+  memory (never saved to disk; gone when the tab closes) and decrypts the body,
+  embedded images and attachments.
+
+Because the extension handles your Proton keys, only run code you trust (this
+repository), and remove the account with **⋯ → Remove account** if you stop using it.
 
 If you sign out of Proton, the account shows *Signed out*; sign in at
 mail.proton.me again and click **Sign in** in the app.

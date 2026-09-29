@@ -47,9 +47,26 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.accounts || Object.keys(changes).some((k) => k.startsWith('mail/'))) updateBadge();
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.cmd === 'refresh') {
     refreshAll().then(() => sendResponse({ ok: true }), (e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  }
+  // Proton's persisted-session entries, from the content script on
+  // mail.proton.me (see src/content/proton-session.js). Only accepted from
+  // that site; they are stored per session UID.
+  if (msg?.cmd === 'protonSessions' && sender.origin === 'https://mail.proton.me' && Array.isArray(msg.items)) {
+    chrome.storage.local.get('protonSessions').then(({ protonSessions = {} }) => {
+      for (const it of msg.items) {
+        if (typeof it?.UID !== 'string' || typeof it.blob !== 'string') continue;
+        protonSessions[it.UID] = {
+          blob: it.blob,
+          payloadVersion: Number(it.payloadVersion) || 1,
+          localID: Number(it.localID) || 0,
+          at: Date.now(),
+        };
+      }
+      return chrome.storage.local.set({ protonSessions });
+    });
   }
 });
