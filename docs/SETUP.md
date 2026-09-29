@@ -114,6 +114,10 @@ Manual update (always works): run the install command from step 0 again, then
 click reload ↻ on the extension card in `chrome://extensions`. It updates the
 existing folder wherever it is and keeps `src/config.js`.
 
+Installed from a downloaded ZIP instead? Run the install command once. It looks up
+the folder Chrome actually loads the extension from (in Chrome's profile settings),
+updates that copy, and sets up the helper, so one-click updates work from then on.
+
 Updating never touches your accounts, settings, sign-ins or cached mail: they are in
 Chrome's storage for this extension, not in its folder. Never **Remove** the
 extension to update it: removing it deletes that data.

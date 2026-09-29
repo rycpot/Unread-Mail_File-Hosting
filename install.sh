@@ -26,13 +26,59 @@ for tool in curl unzip python3; do
   fi
 done
 
-# Update an existing install wherever it is; otherwise use ~/UnreadMail.
-DEST=""
+# Folders Chrome has loaded this extension from ("Load unpacked"), one per
+# line, read from each Chrome / Chromium profile's settings.
+chrome_paths() {
+  python3 - "$HOME" <<'PY'
+import glob, json, os, sys
+home, ext_id = sys.argv[1], 'gnkolniepchhhfhnopbhgbnedkplhjjj'
+roots = ['Library/Application Support/Google/Chrome', 'Library/Application Support/Chromium',
+         '.config/google-chrome', '.config/chromium']
+found = []
+for root in roots:
+    for f in sorted(glob.glob(os.path.join(home, root, '*', '*Preferences'))):
+        try:
+            with open(f, encoding='utf-8') as fh:
+                prefs = json.load(fh)
+            path = prefs['extensions']['settings'][ext_id]['path']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if os.path.isabs(path) and os.path.isfile(os.path.join(path, 'manifest.json')) and path not in found:
+            found.append(path)
+print('\n'.join(found))
+PY
+}
+real() { (cd "$1" 2>/dev/null && pwd -P); }
+# Prints something if Chrome loads the extension from folder $1.
+in_use() { chrome_paths | while read -r p; do [ "$(real "$p")" = "$(real "$1")" ] && echo yes; done; true; }
+
+# Which folder to install into, in order: UNREAD_MAIL_DIR; the folder Chrome
+# actually loads (so a copy loaded from a downloaded ZIP is the one updated);
+# the folder recorded by an earlier install; ~/UnreadMail.
+LOADED="$(chrome_paths 2>/dev/null | head -n 1 || true)"
+RECORDED=""
 if [ -f "$INFO" ]; then
-  DEST="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("extensionDir", ""))' "$INFO" 2>/dev/null || true)"
-  [ -f "$DEST/manifest.json" ] || DEST=""
+  RECORDED="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("extensionDir", ""))' "$INFO" 2>/dev/null || true)"
+  [ -f "$RECORDED/manifest.json" ] || RECORDED=""
 fi
-DEST="${UNREAD_MAIL_DIR:-${DEST:-$HOME/UnreadMail}}"
+DEST="${UNREAD_MAIL_DIR:-${LOADED:-${RECORDED:-$HOME/UnreadMail}}}"
+
+# A copy loaded from Downloads, Documents or Desktop gets moved to ~/UnreadMail
+# by the helper installer (macOS blocks updates there). If ~/UnreadMail is an
+# unused second copy from an earlier install, set it aside first.
+if [ "$(uname -s)" = Darwin ]; then
+  case "$(real "$DEST")" in
+    "$HOME/Downloads/"*|"$HOME/Documents/"*|"$HOME/Desktop/"*)
+      SPARE="$HOME/UnreadMail"
+      if [ -d "$SPARE" ] && [ ! -L "$SPARE" ] && grep -q '"name": "Unread Mail"' "$SPARE/manifest.json" 2>/dev/null \
+        && [ -z "$(in_use "$SPARE")" ]; then
+        OLD="$SPARE-unused-$(date +%Y%m%d-%H%M%S)"
+        mv "$SPARE" "$OLD"
+        echo "Chrome uses the copy in $DEST, so the unused copy in $SPARE was moved to $OLD (you can delete it)."
+      fi
+      ;;
+  esac
+fi
 
 FRESH=1
 if [ -e "$DEST" ]; then
@@ -59,7 +105,7 @@ mkdir -p "$DEST"
 [ -f "$DEST/src/config.js" ] && rm -f "$SRC/src/config.js"
 cp -R "$SRC/." "$DEST/"
 
-if ! UNREAD_MAIL_INSTALLER=1 sh "$DEST/helper/install.sh"; then
+if ! UNREAD_MAIL_INSTALLER=1 sh "$DEST/helper/install.sh" </dev/null; then
   echo "The helper could not be installed; the extension itself is in place." >&2
 fi
 DEST="$(cd "$DEST" && pwd -P)" # install.sh may have moved it out of Downloads
