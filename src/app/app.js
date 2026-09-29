@@ -1070,7 +1070,7 @@ async function installUpdate() {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = 'Install update';
-    const msg = e.code === 'bad_request' || e.code === 'not_configured'
+    const msg = ['bad_request', 'not_configured', 'not_installed'].includes(e.code)
       ? 'One-click updates need the helper: run the install command from the README once in Terminal, then reload the extension.'
       : e.message;
     toast(msg, { error: true });

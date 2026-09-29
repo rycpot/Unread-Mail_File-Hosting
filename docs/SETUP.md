@@ -224,7 +224,7 @@ under **Settings → Notification banners**; keep the two the same:
 
 | Symptom | Fix |
 |---|---|
-| "The IMAP helper is not installed" | Run the install command from step 0, then reload the extension. |
+| "The helper is not installed" | Run the install command from step 0, then reload the extension. |
 | iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
 | Proton shows "request failed" after a Proton update | Open mail.proton.me once, then **Refresh**; the extension re-reads Proton's current app version. If it persists, report the error text. |
 | No notification appears | Check Settings → Notifications for new mail, then macOS System Settings → Notifications → Google Chrome, and that Focus / Do Not Disturb is off. |

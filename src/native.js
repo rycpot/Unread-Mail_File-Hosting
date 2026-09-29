@@ -53,7 +53,7 @@ export function callHelper(payload, { onProgress } = {}) {
 
 function notInstalled(detail) {
   return new HelperError(
-    `The IMAP helper is not installed. Run helper/install.sh from the extension folder (see docs/SETUP.md). (${detail})`,
+    `The helper is not installed. Run the install command from the README (docs/SETUP.md, step 0) in Terminal, then reload the extension. (${detail})`,
     'not_installed',
   );
 }
