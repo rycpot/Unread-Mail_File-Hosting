@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unread Mail</title>
+  <link rel="icon" href="../../icons/icon-32.png">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="../../icons/icon-32.png" alt="" width="22" height="22">
+      <span>Unread Mail</span>
+      <span class="total" id="total" hidden></span>
+    </div>
+    <div class="topbar-actions">
+      <span class="last-checked" id="lastChecked"></span>
+      <button class="icon-btn" id="refreshAll" title="Refresh all accounts" aria-label="Refresh all accounts"></button>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true"></button>
+        <div class="menu settings" id="settingsMenu" hidden>
+          <label class="row">
+            <span>Check every</span>
+            <select id="pollMinutes">
+              <option value="1">1 minute</option>
+              <option value="2">2 minutes</option>
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+            </select>
+          </label>
+          <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
+          <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
+          <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="split">
+    <aside class="sidebar" id="sidebar" aria-label="Accounts and unread mail"></aside>
+    <section class="reader" id="reader" aria-live="polite"></section>
+  </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

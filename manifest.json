@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Unread Mail",
+  "description": "Unread mail from all your Gmail and Outlook accounts in one tab.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9TZ4HAW3MXRxt9s07BuJ07AKabVGvPaDt4GVwxDSYyLGsQkDt48D3YDCNwjnjJiAmyJF7cSAQSNcOs8Hof1TWcu/kstLNyHiGB4x5vN34JIZcaan+YBrWVtt8zTwCZ3t9wQjLlLR7je8I/RO7s6MB/vzhbH/t5lzApbj7B/lRhV4DTWApJnp9MuY+bMJYgj7HXrtxN3eprsQ2ABm83abVUlIB1+CepoE0cgt52c5FwyAitypfapX/gshSC4Evrdfn8hC4u/4tvGJ7TYNlpV2aOqiP6X9RvOJnzw4kQ5V64tJpwSGN2pzFulRsAMSz18Y2S0w06w/Kh7T0K1iC1U6wIDAQAB",
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
+  "permissions": ["identity", "storage", "alarms"],
+  "host_permissions": [
+    "https://gmail.googleapis.com/*",
+    "https://login.microsoftonline.com/*",
+    "https://graph.microsoft.com/*"
+  ],
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "action": { "default_title": "Unread Mail" }
+}
