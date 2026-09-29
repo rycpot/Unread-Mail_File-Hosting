@@ -70,16 +70,24 @@ No client secret is created: the extension uses the PKCE flow.
 > wrong platform. It must be under **Single-page application**, not *Web* or
 > *Mobile and desktop*.
 
-## 3. Paste the IDs
+## 3. Enter the IDs
 
-Edit `src/config.js`:
+Click the toolbar icon to open the app tab, then the **gear icon → OAuth client IDs**
+(it opens by itself on first run). Paste the Google client ID and the Microsoft
+Application (client) ID, then click **Save IDs**.
 
-```js
-export const GOOGLE_CLIENT_ID = '1234-abc.apps.googleusercontent.com';
-export const MICROSOFT_CLIENT_ID = '00000000-0000-0000-0000-000000000000';
-```
+The IDs are saved inside the extension, so updating its files (ZIP or `git pull`)
+never loses them. (`src/config.js` still accepts them as a fallback; IDs found
+there are copied into the extension's storage automatically.)
 
-Then click the reload icon on the extension's card in `chrome://extensions`.
+## Updating the extension
+
+- **ZIP:** download the branch ZIP, copy its files over your existing folder,
+  then click reload ↻ on the extension card in `chrome://extensions`.
+- **git:** `git pull`, then reload ↻.
+
+Never **Remove** the extension to update it: removing it deletes its saved data
+(client IDs, sign-ins and cached mail).
 
 ## 4. Add your accounts
 
@@ -103,7 +111,7 @@ emails stay visible until you sign in again.
 
 | Symptom | Fix |
 |---|---|
-| "client ID is not set" | Step 3 was not done, or the extension was not reloaded. |
+| "client ID is not set" | Enter the IDs under the gear icon → OAuth client IDs (step 3). |
 | `redirect_uri_mismatch` (Google) | The redirect URI in step 1.6 must match exactly, with the trailing `/`. |
 | "Gmail access was not granted" | On the consent screen, tick the Gmail permission checkbox. |
 | Account keeps showing "Signed out" | Sign in to that account on mail.google.com / outlook.live.com in this Chrome profile, then click **Sign in**. |

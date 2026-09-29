@@ -34,6 +34,17 @@
           <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
           <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
           <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>
+          <form class="client-ids" id="clientIdsForm">
+            <div class="section-title">OAuth client IDs</div>
+            <label>Google client ID
+              <input type="text" id="googleClientId" spellcheck="false" autocomplete="off" placeholder="…apps.googleusercontent.com">
+            </label>
+            <label>Microsoft application (client) ID
+              <input type="text" id="microsoftClientId" spellcheck="false" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+            </label>
+            <div class="redirect">Redirect URI for both: <code id="redirectUri"></code></div>
+            <button type="submit" class="tool-btn small">Save IDs</button>
+          </form>
         </div>
       </div>
     </div>

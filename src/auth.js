@@ -9,8 +9,7 @@
 //      still signed in to Google / Microsoft in this browser
 // If all fail the account is marked "needs sign-in"; its last known mail stays.
 
-import { GOOGLE_CLIENT_ID, MICROSOFT_CLIENT_ID } from './config.js';
-import { getAuth, setAuth } from './storage.js';
+import { getAuth, getClientIds, setAuth } from './storage.js';
 
 export class AuthRequiredError extends Error {
   constructor(message = 'Sign-in required') {
@@ -28,10 +27,14 @@ const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 const MS_BASE = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const MS_SCOPES = ['openid', 'offline_access', 'User.Read', 'Mail.ReadWrite'];
 
-function assertConfigured(clientId, name) {
-  if (!clientId || clientId.startsWith('PASTE_')) {
-    throw new Error(`${name} client ID is not set. Edit src/config.js (see docs/SETUP.md).`);
+async function clientId(provider) {
+  const ids = await getClientIds();
+  const id = provider === 'google' ? ids.google : ids.microsoft;
+  if (!id) {
+    const name = provider === 'google' ? 'Google' : 'Microsoft';
+    throw new Error(`${name} client ID is not set. Add it under Settings → OAuth client IDs (see docs/SETUP.md).`);
   }
+  return id;
 }
 
 async function runAuthFlow(url, interactive) {
@@ -64,10 +67,9 @@ async function runAuthFlow(url, interactive) {
 // ---------- Google (implicit flow: access token only, renewed via prompt=none) ----------
 
 async function googleAuthorize({ loginHint, interactive }) {
-  assertConfigured(GOOGLE_CLIENT_ID, 'Google');
   const url = new URL(GOOGLE_AUTH_URL);
   url.search = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
+    client_id: await clientId('google'),
     response_type: 'token',
     redirect_uri: REDIRECT_URI,
     scope: GOOGLE_SCOPES.join(' '),
@@ -102,7 +104,7 @@ async function msToken(body) {
   const res = await fetch(`${MS_BASE}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: MICROSOFT_CLIENT_ID, scope: MS_SCOPES.join(' '), ...body }),
+    body: new URLSearchParams({ client_id: await clientId('microsoft'), scope: MS_SCOPES.join(' '), ...body }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -118,12 +120,12 @@ async function msToken(body) {
 }
 
 async function microsoftAuthorize({ loginHint, interactive }) {
-  assertConfigured(MICROSOFT_CLIENT_ID, 'Microsoft');
+  const msClientId = await clientId('microsoft');
   const { verifier, challenge } = await pkcePair();
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
   const url = new URL(`${MS_BASE}/authorize`);
   url.search = new URLSearchParams({
-    client_id: MICROSOFT_CLIENT_ID,
+    client_id: msClientId,
     response_type: 'code',
     response_mode: 'query',
     redirect_uri: REDIRECT_URI,

@@ -1,4 +1,5 @@
-// OAuth client IDs. See docs/SETUP.md for how to create them.
+// Optional fallback OAuth client IDs. Normally you enter them in the app under
+// Settings → OAuth client IDs, which survives updates; see docs/SETUP.md.
 // Neither value is a secret: both flows are public-client flows (no client secret).
 export const GOOGLE_CLIENT_ID = 'PASTE_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
 export const MICROSOFT_CLIENT_ID = 'PASTE_MICROSOFT_APPLICATION_ID';

@@ -4,10 +4,11 @@
 //   auth/<accountId>  { accessToken, expiresAt, refreshToken? }
 //   mail/<accountId>  MailState (last known unread list; never wiped on errors)
 //   settings          Settings
+//   clientIds         { google, microsoft } OAuth client IDs entered in Settings
 // Each account's mail and auth live under their own key so the background
 // poller and the app tab never overwrite each other's writes.
 
-import { DEFAULT_SETTINGS } from './config.js';
+import { DEFAULT_SETTINGS, GOOGLE_CLIENT_ID, MICROSOFT_CLIENT_ID } from './config.js';
 
 const local = chrome.storage.local;
 
@@ -85,4 +86,26 @@ export async function saveSettings(patch) {
   const settings = { ...(await getSettings()), ...patch };
   await local.set({ settings });
   return settings;
+}
+
+// OAuth client IDs live in storage so that replacing the extension's files on
+// update never loses them. Values in config.js are only a fallback.
+const configured = (v) => (v && !v.startsWith('PASTE_') ? v : '');
+
+export async function getClientIds() {
+  const stored = (await local.get('clientIds')).clientIds ?? {};
+  const ids = {
+    google: stored.google || configured(GOOGLE_CLIENT_ID),
+    microsoft: stored.microsoft || configured(MICROSOFT_CLIENT_ID),
+  };
+  // Adopt IDs found only in config.js, so a later update that resets the file
+  // keeps working.
+  if ((ids.google && !stored.google) || (ids.microsoft && !stored.microsoft)) {
+    await local.set({ clientIds: ids });
+  }
+  return ids;
+}
+
+export async function saveClientIds({ google, microsoft }) {
+  await local.set({ clientIds: { google: google.trim(), microsoft: microsoft.trim() } });
 }

@@ -2,7 +2,7 @@ import { providers } from '../providers/index.js';
 import { saveToken, signIn } from '../auth.js';
 import {
   accountId, getAccounts, getAllMail, getMail, getSettings, patchMail, removeAccount,
-  saveSettings, setAccountHidden, upsertAccount,
+  getClientIds, saveClientIds, saveSettings, setAccountHidden, upsertAccount,
 } from '../storage.js';
 import { refreshAccount } from '../sync.js';
 import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
@@ -587,6 +587,7 @@ $('settingsBtn').addEventListener('click', (e) => {
   const open = menu.hidden;
   closeMenus();
   menu.hidden = !open;
+  if (open) fillClientIds();
 });
 $('settingsMenu').addEventListener('click', (e) => e.stopPropagation());
 $('pollMinutes').addEventListener('change', (e) => saveSettings({ pollMinutes: Number(e.target.value) }));
@@ -595,10 +596,27 @@ $('loadRemoteImages').addEventListener('change', (e) => saveSettings({ loadRemot
 $('showHidden').addEventListener('change', (e) => saveSettings({ showHidden: e.target.checked }));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMenus());
 
+$('redirectUri').textContent = chrome.identity.getRedirectURL();
+async function fillClientIds() {
+  const ids = await getClientIds();
+  $('googleClientId').value = ids.google;
+  $('microsoftClientId').value = ids.microsoft;
+}
+$('clientIdsForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await saveClientIds({ google: $('googleClientId').value, microsoft: $('microsoftClientId').value });
+  toast('Client IDs saved');
+  refreshAllFromUi();
+});
+
 // Keep "Checked N min ago" current.
 setInterval(renderTopbar, 30000);
 
 await load();
+await fillClientIds();
 renderTopbar();
 renderSidebar();
 renderReaderEmpty();
+// First run: open Settings so the client IDs can be entered.
+const ids = await getClientIds();
+if (!ids.google && !ids.microsoft) $('settingsMenu').hidden = false;
