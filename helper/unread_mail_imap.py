@@ -154,9 +154,43 @@ def server_for(provider):
     return host, port, False
 
 
+# Python from python.org on macOS ships with no trusted root certificates until
+# its "Install Certificates" script is run, so fall back to other sources of
+# the same public roots instead of failing verification.
+CA_FILES = ('/etc/ssl/cert.pem', '/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt')
+
+
+def tls_context():
+    ctx = ssl.create_default_context()
+    if ctx.cert_store_stats().get('x509_ca', 0):
+        return ctx
+    try:
+        import certifi  # present if "Install Certificates.command" was run
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+    except (ImportError, OSError, ssl.SSLError):
+        pass
+    for path in CA_FILES:
+        if os.path.exists(path):
+            try:
+                ctx.load_verify_locations(path)
+                return ctx
+            except (OSError, ssl.SSLError):
+                continue
+    if sys.platform == 'darwin':
+        # Last resort: export Apple's built-in root store.
+        res = subprocess.run(
+            ['/usr/bin/security', 'find-certificate', '-a', '-p',
+             '/System/Library/Keychains/SystemRootCertificates.keychain'],
+            capture_output=True, text=True)
+        if res.returncode == 0 and 'BEGIN CERTIFICATE' in res.stdout:
+            ctx.load_verify_locations(cadata=res.stdout)
+    return ctx
+
+
 def connect(provider, email_addr, password=None):
     host, port, insecure = server_for(provider)
-    ctx = ssl.create_default_context()
+    ctx = tls_context()
     if insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -495,7 +529,8 @@ def _logout(conn):
 
 
 COMMANDS = {
-    'ping': lambda req: {'version': VERSION, 'platform': sys.platform},
+    'ping': lambda req: {'version': VERSION, 'platform': sys.platform,
+                         'caCerts': tls_context().cert_store_stats().get('x509_ca', 0)},
     'saveAccount': cmd_save_account,
     'removeAccount': cmd_remove_account,
     'summary': cmd_summary,

@@ -56,8 +56,13 @@ done
 unset IFS
 
 # Quick self-test: a ping through the same framing Chrome uses.
-if printf '\016\000\000\000{"cmd":"ping"}' | "$LAUNCHER" | tail -c +5 | grep -q '"version"'; then
+PING="$(printf '\016\000\000\000{"cmd":"ping"}' | "$LAUNCHER" | tail -c +5)"
+if echo "$PING" | grep -q '"version"'; then
   echo "Unread Mail IMAP helper installed (python: $PYTHON)."
+  if echo "$PING" | grep -q '"caCerts": 0[,}]'; then
+    echo "Warning: this Python has no trusted certificates, so secure connections will fail." >&2
+    echo "Run the 'Install Certificates.command' in your Python folder under /Applications." >&2
+  fi
   echo "Reload the extension in chrome://extensions if it is open."
 else
   echo "Installed, but the self-test failed. Check that $PYTHON runs." >&2
