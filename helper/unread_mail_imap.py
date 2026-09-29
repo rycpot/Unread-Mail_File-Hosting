@@ -687,7 +687,7 @@ def watch_loop(first_request):
 # install.json next to this file. The ZIP comes only from this repository's
 # branch over HTTPS; it must carry the same extension key (so it is the same
 # extension) before anything is written. src/config.js is kept, as by
-# update-mail. Accounts and settings are in Chrome's storage, not in the folder.
+# the installer. Accounts and settings are in Chrome's storage, not in the folder.
 
 UPDATE_REPO = 'rycpot/unread-emails-notifier'
 UPDATE_BRANCH = 'claude/blissful-faraday-8ykg9h'
@@ -705,7 +705,7 @@ def _install_info():
     ext = info.get('extensionDir')
     ext = ext and os.path.realpath(ext)  # write to the real folder, not a link to it
     if not ext or not os.path.isfile(os.path.join(ext, 'manifest.json')):
-        raise HelperError('not_configured', 'Run update-mail (or helper/install.sh) once in Terminal to enable one-click updates.')
+        raise HelperError('not_configured', 'Run the install command from the README once in Terminal to enable one-click updates.')
     return ext
 
 
@@ -725,8 +725,8 @@ def cmd_self_update(req):
     try:
         return _self_update(ext)
     except PermissionError:
-        raise HelperError('permission', "macOS doesn't let the helper change files in {}. Run update-mail (or "
-                          'helper/install.sh) once: it moves the folder to ~/UnreadMail, which is allowed.'.format(ext))
+        raise HelperError('permission', "macOS doesn't let the helper change files in {}. Run the install command from "
+                          'the README once: it moves the folder to ~/UnreadMail, which is allowed.'.format(ext))
 
 
 def _self_update(ext):
@@ -770,7 +770,7 @@ def _self_update(ext):
     res = subprocess.run(['/bin/sh', os.path.join(ext, 'helper', 'install.sh')],
                          capture_output=True, text=True, timeout=120)
     if res.returncode != 0:
-        warning = 'Updated, but refreshing the helper failed; run update-mail. {}'.format(res.stderr.strip()[-300:])
+        warning = 'Updated, but refreshing the helper failed; run the install command from the README. {}'.format(res.stderr.strip()[-300:])
     return {'version': new.get('version'), 'helperWarning': warning}
 
 

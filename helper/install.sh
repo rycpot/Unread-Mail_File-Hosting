@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 # macOS protects Downloads, Documents and Desktop from helper programs, so
 # "Install update" could not write the extension there. Move the folder to
 # ~/UnreadMail and leave a link at the old path: Chrome (which loaded the old
-# path), update-mail and your accounts carry on unchanged.
+# path), the installer and your accounts carry on unchanged.
 EXT_DIR="$(cd "$HERE/.." && pwd -P)"
 if [ "$(uname -s)" = Darwin ] && [ -f "$EXT_DIR/manifest.json" ]; then
   case "$EXT_DIR" in
@@ -23,7 +23,7 @@ if [ "$(uname -s)" = Darwin ] && [ -f "$EXT_DIR/manifest.json" ]; then
         mv "$EXT_DIR" "$TARGET"
         ln -s "$TARGET" "$EXT_DIR"
         echo "Moved the extension folder to $TARGET (macOS protects $(dirname "$EXT_DIR"));"
-        echo "$EXT_DIR now links to it, so Chrome and update-mail keep working."
+        echo "$EXT_DIR now links to it, so Chrome keeps working."
         EXT_DIR="$TARGET"
         HERE="$TARGET/helper"
       fi
@@ -93,7 +93,7 @@ if echo "$PING" | grep -q '"version"'; then
     echo "Warning: this Python has no trusted certificates, so secure connections will fail." >&2
     echo "Run the 'Install Certificates.command' in your Python folder under /Applications." >&2
   fi
-  echo "Reload the extension in chrome://extensions if it is open."
+  [ -n "${UNREAD_MAIL_INSTALLER:-}" ] || echo "Reload the extension in chrome://extensions if it is open."
 else
   echo "Installed, but the self-test failed. Check that $PYTHON runs." >&2
   exit 1

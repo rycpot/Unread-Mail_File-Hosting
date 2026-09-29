@@ -3,11 +3,21 @@
 One-time setup, about 15 minutes. You create **one** Google OAuth client and **one**
 Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
 
-## 0. Load the extension
+## 0. Install and load the extension
 
-1. Open `chrome://extensions`, turn on **Developer mode** (top right).
-2. Click **Load unpacked** and pick this repository's folder.
-3. Check the ID shown on the card is:
+1. Paste into Terminal (macOS; Linux works too):
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
+   ```
+
+   It downloads the extension into `~/UnreadMail` and installs the local helper,
+   which iCloud, Yahoo and AOL use and which installs updates for you. Run it
+   whatever accounts you plan to connect.
+2. In Chrome open `chrome://extensions`, turn on **Developer mode** (top right).
+3. Click **Load unpacked**, press **⌘⇧G**, paste (**⌘V**, the installer copied the
+   path), press Return, then **Select**.
+4. Check the ID shown on the card is:
 
    ```
    gnkolniepchhhfhnopbhgbnedkplhjjj
@@ -91,21 +101,18 @@ there is a newer version, a bar at the top shows it with what changed:
 - **Later** hides the bar until the next version. **Settings → Check for updates**
   checks straight away.
 
-This needs the helper from section 5, installed or refreshed once with version
-0.6.1 or later (the installer records where your extension folder is).
+This needs the helper, which the installer from step 0 sets up (it also records
+where your extension folder is).
 
 macOS does not let the helper change files in **Downloads, Documents or Desktop**.
 If the extension folder is in one of those, the installer moves it to
-`~/UnreadMail` and leaves a link at the old path, so Chrome, `update-mail` and your
+`~/UnreadMail` and leaves a link at the old path, so Chrome and your
 accounts carry on unchanged. Don't delete that link: Chrome loads the extension
 through it.
 
-Manual update (always works):
-
-- **ZIP:** download the branch ZIP, copy its files over your existing folder
-  (except `src/config.js`), run `sh helper/install.sh`, then click reload ↻ on the
-  extension card in `chrome://extensions`.
-- **git:** `git pull`, `sh helper/install.sh`, then reload ↻.
+Manual update (always works): run the install command from step 0 again, then
+click reload ↻ on the extension card in `chrome://extensions`. It updates the
+existing folder wherever it is and keeps `src/config.js`.
 
 Updating never touches your accounts, settings, sign-ins or cached mail: they are in
 Chrome's storage for this extension, not in its folder. Never **Remove** the
@@ -142,14 +149,12 @@ cached on disk.
 account open in IMAP IDLE mode, so new mail (or mail read elsewhere) shows up
 within about a second, without repeated sign-ins. It stops when Chrome quits.
 
-### Install the helper (once, and again after updates)
+### The helper
 
-```bash
-sh ~/Downloads/unread-emails-notifier/helper/install.sh
-```
-
-It copies the helper to `~/Library/Application Support/UnreadMail/`, registers
-it with Chrome, and runs a self-test. Then reload the extension.
+The installer from step 0 already set it up: it copies the helper to
+`~/Library/Application Support/UnreadMail/`, registers it with Chrome and runs a
+self-test. Updates refresh it automatically. To set it up again by hand:
+`sh ~/UnreadMail/helper/install.sh`, then reload the extension.
 
 ### Create app-specific passwords
 
@@ -215,7 +220,7 @@ under **Settings → Notification banners**; keep the two the same:
 
 | Symptom | Fix |
 |---|---|
-| "The IMAP helper is not installed" | Run `helper/install.sh` (section 5), then reload the extension. |
+| "The IMAP helper is not installed" | Run the install command from step 0, then reload the extension. |
 | iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
 | Proton shows "request failed" after a Proton update | Open mail.proton.me once, then **Refresh**; the extension re-reads Proton's current app version. If it persists, report the error text. |
 | No notification appears | Check Settings → Notifications for new mail, then macOS System Settings → Notifications → Google Chrome, and that Focus / Do Not Disturb is off. |

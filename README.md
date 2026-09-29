@@ -16,6 +16,20 @@ Trash or Deleted Items), without opening the webmail site.
 
 Any number of accounts per provider.
 
+## Install (macOS)
+
+Paste into Terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
+```
+
+It downloads the extension into `~/UnreadMail` and installs its small local helper.
+Then in Chrome: `chrome://extensions` → **Developer mode** → **Load unpacked** → pick
+`~/UnreadMail` (the installer copies the path for you). After that, new versions
+show up as a bar at the top of the app and install with one click; running the
+command again also updates.
+
 ## Setup
 
 See [docs/SETUP.md](docs/SETUP.md). You need one Google OAuth client and one Microsoft
