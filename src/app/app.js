@@ -41,6 +41,8 @@ const state = {
   lastPicked: null, // { accountId, messageId } anchor for shift-click ranges
   allUnread: new Set(), // accounts where "all unread", beyond those listed, is selected
   progress: new Map(), // accountId -> "Marking 120 of 812…" while a bulk action runs
+  recentOpen: new Set(), // accounts whose "Recently read" section is expanded
+  recent: new Map(), // accountId -> { loading, messages, error }
 };
 
 const $ = (id) => document.getElementById(id);
@@ -235,7 +237,53 @@ function renderAccount(a) {
     ${notice}
     ${bulkBar}
     ${msgs ? `<ul class="messages">${msgs}${more}</ul>` : ''}
+    ${renderRecent(a)}
   </div>`;
+}
+
+// "Recently read": the last few read inbox emails, collapsed by default and
+// fetched only when opened.
+const RECENT_LIMIT = 10;
+
+function renderRecent(a) {
+  const aid = esc(a.id);
+  const open = state.recentOpen.has(a.id);
+  const r = state.recent.get(a.id);
+  let body = '';
+  if (open) {
+    if (!r || r.loading) body = '<li class="recent-note">Loading…</li>';
+    else if (r.error) body = `<li class="recent-note error">${esc(r.error)}</li>`;
+    else if (!r.messages.length) body = '<li class="recent-note">No read emails in the inbox.</li>';
+    else {
+      body = r.messages.map((msg) => {
+        const sel = state.selected?.accountId === a.id && state.selected?.messageId === msg.id;
+        return `<li class="msg-row read recent${sel ? ' selected' : ''}">
+          <button class="msg" data-action="open" data-account="${aid}" data-message="${esc(msg.id)}" data-recent="1">
+            <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
+            <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
+          </button></li>`;
+      }).join('');
+    }
+  }
+  return `<div class="recent-block">
+    <button class="recent-toggle" data-action="toggle-recent" data-account="${aid}" aria-expanded="${open}">
+      ${icon.chevron.replace('<svg', '<svg class="chevron"')}Recently read
+    </button>
+    ${open ? `<ul class="messages recent-list">${body}</ul>` : ''}
+  </div>`;
+}
+
+async function loadRecent(id) {
+  const a = state.accounts[id];
+  state.recent.set(id, { loading: true, messages: [] });
+  renderSidebar();
+  try {
+    const messages = await providers[a.provider].fetchRecentRead(a, RECENT_LIMIT);
+    state.recent.set(id, { messages });
+  } catch (e) {
+    state.recent.set(id, { messages: [], error: e.name === 'AuthRequiredError' ? 'Sign in again to load read emails.' : e.message });
+  }
+  renderSidebar();
 }
 
 // Checked (multi-select) emails per account. Ids that no longer exist in the
@@ -340,6 +388,7 @@ function closeMenus() {
 
 async function addAccount(providerId, loginHint) {
   const provider = providers[providerId];
+  if (provider.kind === 'imap') return openImapDialog(provider, loginHint);
   try {
     const token = await signIn(providerId, loginHint);
     const { email } = await provider.identify(token);
@@ -360,6 +409,52 @@ async function addAccount(providerId, loginHint) {
   }
 }
 
+// ---------- IMAP account dialog (iCloud, Yahoo, AOL) ----------
+
+let dialogProvider = null;
+
+function openImapDialog(provider, email) {
+  dialogProvider = provider;
+  $('imapTitle').textContent = email ? `Sign in to ${email}` : `Add ${provider.name} account`;
+  $('imapHelp').textContent = provider.passwordHelp.text;
+  $('imapHelpLink').href = provider.passwordHelp.url;
+  $('imapEmail').value = email ?? '';
+  $('imapEmail').readOnly = Boolean(email);
+  $('imapPassword').value = '';
+  $('imapError').hidden = true;
+  $('imapDialog').showModal();
+  (email ? $('imapPassword') : $('imapEmail')).focus();
+}
+
+async function submitImapDialog(e) {
+  e.preventDefault();
+  const provider = dialogProvider;
+  const email = $('imapEmail').value.trim();
+  const password = $('imapPassword').value.replace(/\s+/g, '');
+  const button = $('imapSubmit');
+  button.disabled = true;
+  button.textContent = 'Checking…';
+  $('imapError').hidden = true;
+  try {
+    await provider.saveAccount(email, password);
+    const id = accountId(provider.id, email);
+    await upsertAccount({ id, provider: provider.id, email, hidden: false, addedAt: Date.now() });
+    $('imapDialog').close();
+    toast(`${email} connected`);
+    collapsed.delete(id);
+    saveCollapsed();
+    await refreshOne(id);
+  } catch (err) {
+    $('imapError').textContent = err.name === 'AuthRequiredError'
+      ? `${provider.name} rejected the email or app password. ${err.message}`
+      : err.message;
+    $('imapError').hidden = false;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Connect';
+  }
+}
+
 async function refreshOne(id) {
   const a = state.accounts[id] ?? (await getAccounts())[id];
   if (!a) return;
@@ -372,6 +467,7 @@ async function refreshAllFromUi() {
   try {
     const res = await chrome.runtime.sendMessage({ cmd: 'refresh' });
     if (res && !res.ok) toast(res.error, { error: true });
+    for (const id of state.recentOpen) loadRecent(id);
   } finally {
     btn.classList.remove('spinning');
   }
@@ -402,16 +498,29 @@ async function setRead(id, messageId, read) {
     state.message.isRead = read;
     renderReaderToolbar();
   }
+  // A "Recently read" email marked unread moves back to the unread list.
+  const recent = state.recent.get(id);
+  if (!read && recent?.messages?.some((m) => m.id === messageId)) {
+    recent.messages = recent.messages.filter((m) => m.id !== messageId);
+    renderSidebar();
+    refreshOne(id);
+  }
 }
 
 async function trashMessage(id, messageId) {
   const a = state.accounts[id];
-  const list = state.mail[id]?.messages ?? [];
+  // The email may be in the unread list, in "Recently read", or both (an
+  // unread email that was just opened). Move on to its neighbour in the list
+  // it was opened from.
+  const recent = state.recent.get(id);
+  const unreadList = state.mail[id]?.messages ?? [];
+  const list = unreadList.some((m) => m.id === messageId) ? unreadList : recent?.messages ?? [];
   const idx = list.findIndex((m) => m.id === messageId);
-  const next = list[idx + 1] ?? list[idx - 1];
+  const next = idx === -1 ? null : list[idx + 1] ?? list[idx - 1];
   await providers[a.provider].trash(a, messageId);
+  if (recent) recent.messages = recent.messages.filter((m) => m.id !== messageId);
   await updateCachedMessage(id, messageId, (msg) => ({ message: null, unreadDelta: msg.read ? 0 : -1 }));
-  toast(a.provider === 'gmail' ? 'Moved to Trash' : 'Moved to Deleted Items');
+  toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
   if (next) openMessage(id, next.id);
   else {
     state.selected = null;
@@ -564,6 +673,13 @@ document.addEventListener('click', async (e) => {
       collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id);
       saveCollapsed();
       return renderSidebar();
+    case 'toggle-recent':
+      if (state.recentOpen.has(id)) {
+        state.recentOpen.delete(id);
+        return renderSidebar();
+      }
+      state.recentOpen.add(id);
+      return loadRecent(id);
     case 'pick':
       toggleChecked(id, messageId, el.checked, { range: e.shiftKey });
       return renderSidebar();
@@ -602,6 +718,8 @@ document.addEventListener('click', async (e) => {
           state.message = null;
           renderReaderEmpty();
         }
+        const a = state.accounts[id];
+        await providers[a.provider].forgetAccount?.(a).catch(() => {});
         await removeAccount(id);
       }
       return;
@@ -650,6 +768,8 @@ async function fillClientIds() {
   $('googleClientId').value = ids.google;
   $('microsoftClientId').value = ids.microsoft;
 }
+$('imapForm').addEventListener('submit', submitImapDialog);
+$('imapCancel').addEventListener('click', () => $('imapDialog').close());
 $('clientIdsForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   await saveClientIds({ google: $('googleClientId').value, microsoft: $('microsoftClientId').value });

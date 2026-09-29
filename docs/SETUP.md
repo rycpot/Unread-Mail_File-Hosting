@@ -107,10 +107,47 @@ this to keep working, **stay signed in to all accounts in this Chrome profile**
 fails, that account shows **Signed out** with a **Sign in** button; its last known
 emails stay visible until you sign in again.
 
+## 5. iCloud, Yahoo and AOL (IMAP helper)
+
+These accounts use IMAP through a small local helper
+(`helper/unread_mail_imap.py`, Python standard library only). Chrome starts it
+on demand; it is not a server and does not run when Chrome is closed. It only
+ever reads unread mail (headers of the newest 30), a body when you open an
+email, and the last 10 read emails when you open *Recently read*. Nothing is
+cached on disk.
+
+### Install the helper (once, and again after updates)
+
+```bash
+sh ~/Downloads/unread-emails-notifier/helper/install.sh
+```
+
+It copies the helper to `~/Library/Application Support/UnreadMail/`, registers
+it with Chrome, and runs a self-test. Then reload the extension.
+
+### Create app-specific passwords
+
+Your normal password will not work over IMAP; each service issues app passwords:
+
+| Service | Where | Username to use |
+|---|---|---|
+| iCloud | <https://account.apple.com> → Sign-In and Security → **App-Specific Passwords** | your **@icloud.com** address (not a non-Apple Apple ID email) |
+| Yahoo | <https://login.yahoo.com/account/security> → **Generate app password** | your Yahoo address |
+| AOL | <https://login.aol.com/account/security> → **Generate app password** | your AOL address |
+
+### Add the accounts
+
+In the app tab: **iCloud / Yahoo / AOL → Add account**, enter the address and
+the app password, **Connect**. The helper signs in once to check it, then saves
+the password in the macOS **Keychain** (item `unread-mail-imap`). The extension
+itself never stores it. **Remove account** deletes the Keychain item too.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
+| "The IMAP helper is not installed" | Run `helper/install.sh` (section 5), then reload the extension. |
+| iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
 | "client ID is not set" | Enter the IDs under the gear icon → OAuth client IDs (step 3). |
 | `redirect_uri_mismatch` (Google) | The redirect URI in step 1.6 must match exactly, with the trailing `/`. |
 | "Gmail access was not granted" | On the consent screen, tick the Gmail permission checkbox. |

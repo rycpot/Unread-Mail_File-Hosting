@@ -22,23 +22,13 @@ export const gmail = {
       apiFetch(account, `${API}/labels/INBOX`),
       apiFetch(account, `${API}/messages?labelIds=INBOX&labelIds=UNREAD&maxResults=${MAX_MESSAGES_PER_ACCOUNT}`),
     ]);
-    const refs = list.messages ?? [];
-    const metas = await mapLimit(refs, 8, (m) =>
-      apiFetch(account, `${API}/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`),
-    );
-    const messages = metas.map((m) => {
-      const h = headerMap(m.payload?.headers);
-      return {
-        id: m.id,
-        threadId: m.threadId,
-        from: parseAddress(h.from),
-        subject: h.subject ?? '',
-        snippet: decodeEntities(m.snippet),
-        date: Number(m.internalDate),
-      };
-    });
-    messages.sort((a, b) => b.date - a.date);
-    return { unreadCount: label.messagesUnread ?? messages.length, messages };
+    return { unreadCount: label.messagesUnread ?? 0, messages: await headers(account, list.messages ?? []) };
+  },
+
+  // The newest already-read inbox emails, fetched only when asked for.
+  async fetchRecentRead(account, limit) {
+    const list = await apiFetch(account, `${API}/messages?labelIds=INBOX&q=${encodeURIComponent('is:read')}&maxResults=${limit}`);
+    return headers(account, list.messages ?? []);
   },
 
   async getMessage(account, id) {
@@ -147,4 +137,23 @@ function walkParts(part, out) {
       inline: Boolean(contentId) && !disposition.startsWith('attachment'),
     });
   }
+}
+
+// From/Subject/snippet/date for a list of message refs, newest first.
+async function headers(account, refs) {
+  const metas = await mapLimit(refs, 8, (m) =>
+    apiFetch(account, `${API}/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`),
+  );
+  const messages = metas.map((m) => {
+    const h = headerMap(m.payload?.headers);
+    return {
+      id: m.id,
+      threadId: m.threadId,
+      from: parseAddress(h.from),
+      subject: h.subject ?? '',
+      snippet: decodeEntities(m.snippet),
+      date: Number(m.internalDate),
+    };
+  });
+  return messages.sort((a, b) => b.date - a.date);
 }

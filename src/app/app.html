@@ -55,6 +55,27 @@
     <section class="reader" id="reader" aria-live="polite"></section>
   </main>
 
+  <dialog class="dialog" id="imapDialog" aria-labelledby="imapTitle">
+    <form id="imapForm" method="dialog">
+      <h2 id="imapTitle">Add account</h2>
+      <p class="dialog-help"><span id="imapHelp"></span>
+        <a id="imapHelpLink" target="_blank" rel="noopener">Open account settings</a></p>
+      <label>Email address
+        <input type="email" id="imapEmail" required autocomplete="off" spellcheck="false">
+      </label>
+      <label>App-specific password
+        <input type="password" id="imapPassword" required autocomplete="off" spellcheck="false">
+      </label>
+      <p class="dialog-note">The password is checked by signing in, then kept in your Mac's Keychain by the local
+        IMAP helper. The extension never stores it.</p>
+      <p class="dialog-error" id="imapError" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="tool-btn" id="imapCancel">Cancel</button>
+        <button type="submit" class="tool-btn primary" id="imapSubmit">Connect</button>
+      </div>
+    </form>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

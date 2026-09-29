@@ -4,10 +4,12 @@ A Chrome extension (Manifest V3) that shows unread mail from several accounts in
 full tab. Click an email to read it, mark it read or unread, or delete it (moves it to
 Trash or Deleted Items), without opening the webmail site.
 
-**Phase 1 (this version):** Gmail via the Gmail API, Outlook/Hotmail via Microsoft
-Graph, with any number of accounts each.
-**Phase 2 (planned):** iCloud, Yahoo, AOL and Proton, using the browser's existing
-sessions.
+- **Gmail** via the Gmail API and **Outlook/Hotmail** via Microsoft Graph.
+- **iCloud, Yahoo and AOL** via IMAP, through a small local helper (Chrome
+  native messaging) with app-specific passwords kept in the macOS Keychain.
+- **Proton** (free plan, session based) is planned.
+
+Any number of accounts per provider.
 
 ## Layout
 
@@ -37,6 +39,8 @@ sessions.
   deletes one.
 - **⋯ → Hide** hides an account and leaves it out of the badge count. You can
   still reach it through *Settings → Show hidden accounts*.
+- **Recently read** under each account (collapsed by default) loads the last 10
+  read inbox emails on demand, so they can be reopened, marked unread or deleted.
 - The toolbar badge shows the total unread count across visible accounts.
 
 ## Setup
@@ -51,6 +55,7 @@ load the folder unpacked.
 |---|---|
 | Gmail | Scope `gmail.modify`. The unread count comes from `labels/INBOX`. The list is `INBOX` + `UNREAD` messages. Delete means `messages.trash`. |
 | Outlook | Scope `Mail.ReadWrite`. The unread count comes from `mailFolders/inbox`. Delete moves the message to `deleteditems`. |
+| iCloud / Yahoo / AOL | IMAP via `helper/unread_mail_imap.py`. Listing uses `EXAMINE` (read-only) and `SEARCH UNSEEN`, fetching only From/Subject/Date of the newest 30; bodies use `BODY.PEEK[]` on click; delete is `UID MOVE` to the Trash folder. |
 | Sign-in | `chrome.identity.launchWebAuthFlow`, so several accounts per provider are supported. Google uses the token flow; Microsoft uses auth code + PKCE. Renewal is silent: a refresh token (Microsoft), then `prompt=none` + `login_hint`. |
 | Polling | A `chrome.alarms` alarm, every 1 to 15 minutes (set in Settings). State lives in `chrome.storage.local`. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
@@ -66,6 +71,9 @@ src/http.js              authorised fetch with one renew-and-retry on 401
 src/storage.js           chrome.storage.local layout
 src/providers/gmail.js   Gmail API adapter
 src/providers/outlook.js Microsoft Graph adapter
+src/providers/imap.js    iCloud / Yahoo / AOL adapter (talks to the helper)
+src/native.js            native messaging client for the helper
+helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
 src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0)
 ```

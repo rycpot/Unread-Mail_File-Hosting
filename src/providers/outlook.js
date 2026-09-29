@@ -24,25 +24,16 @@ export const outlook = {
   },
 
   async fetchSummary(account) {
-    // Graph only allows $orderby together with $filter when the ordered property
-    // also appears first in the filter, hence the always-true date clause.
-    const filter = enc('receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false');
-    const [folder, list] = await Promise.all([
+    const [folder, messages] = await Promise.all([
       apiFetch(account, `${API}/mailFolders/inbox?$select=unreadItemCount`),
-      apiFetch(
-        account,
-        `${API}/mailFolders/inbox/messages?$filter=${filter}&$orderby=receivedDateTime%20desc` +
-          `&$top=${MAX_MESSAGES_PER_ACCOUNT}&$select=id,subject,from,receivedDateTime,bodyPreview`,
-      ),
+      listInbox(account, false, MAX_MESSAGES_PER_ACCOUNT),
     ]);
-    const messages = (list.value ?? []).map((m) => ({
-      id: m.id,
-      from: toAddress(m.from),
-      subject: m.subject ?? '',
-      snippet: m.bodyPreview ?? '',
-      date: Date.parse(m.receivedDateTime),
-    }));
     return { unreadCount: folder.unreadItemCount ?? messages.length, messages };
+  },
+
+  // The newest already-read inbox emails, fetched only when asked for.
+  async fetchRecentRead(account, limit) {
+    return listInbox(account, true, limit);
   },
 
   async getMessage(account, id) {
@@ -162,3 +153,22 @@ export const outlook = {
     });
   },
 };
+
+// Newest inbox messages that are read (or unread), newest first. Graph only
+// allows $orderby with $filter when the ordered property also comes first in
+// the filter, hence the always-true date clause.
+async function listInbox(account, isRead, top) {
+  const filter = enc(`receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq ${isRead}`);
+  const list = await apiFetch(
+    account,
+    `${API}/mailFolders/inbox/messages?$filter=${filter}&$orderby=receivedDateTime%20desc` +
+      `&$top=${top}&$select=id,subject,from,receivedDateTime,bodyPreview`,
+  );
+  return (list.value ?? []).map((m) => ({
+    id: m.id,
+    from: toAddress(m.from),
+    subject: m.subject ?? '',
+    snippet: m.bodyPreview ?? '',
+    date: Date.parse(m.receivedDateTime),
+  }));
+}
