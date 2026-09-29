@@ -11,7 +11,7 @@ Trash or Deleted Items), without opening the webmail site.
   mail arrives by push (IMAP IDLE) within about a second.
 - Select several emails (or all) to mark them read or move them to Trash (with a
   confirmation). Each account, and every **All** view combined, has collapsed
-  **Recently read** and **Spam** sections at the bottom; Spam lists unread spam
+  **Recently read** and **Spam** sections pinned at the bottom (they open upwards); Spam lists unread spam
   only, with its count, and it can be read, deleted or marked *Not spam*.
 - **Proton** (free plan) through the mail.proton.me session signed in in Chrome:
   unread list, mark read/unread, delete and Recently read. Bodies and attachments

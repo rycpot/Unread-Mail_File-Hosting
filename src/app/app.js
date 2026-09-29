@@ -374,20 +374,27 @@ function renderSidebar() {
   const footer = hiddenCount && !provider && !account
     ? `<div class="list-note">${hiddenCount} hidden account${hiddenCount > 1 ? 's' : ''} not shown · <button class="link-btn" data-action="show-hidden">Show in provider views</button></div>` : '';
 
-  const listEl = sidebar.querySelector('.pane');
-  const scroll = listEl?.scrollTop ?? 0;
+  // Scroll positions survive the re-render (the list and each open section).
+  const scrolls = [...sidebar.querySelectorAll('[data-scroll]')].map((el) => [el.dataset.scroll, el.scrollTop]);
+  const key = sectionKey();
+  const dock = key ? renderSection('recent', key) + renderSection('spam', key) : '';
   sidebar.innerHTML = `${renderRail()}
-    <div class="pane${selecting ? ' selecting' : ''}">
-      ${renderChips()}
-      ${account ? renderAccountBar(state.accounts[account]) : ''}
-      ${renderNotices(accounts)}
-      ${head}
-      ${rows ? `<ul class="messages">${rows}</ul>` : ''}
-      ${more}${empty}
-      ${sectionKey() ? renderSection('recent', sectionKey()) + renderSection('spam', sectionKey()) : ''}
-      ${footer}
+    <div class="pane-col">
+      <div class="pane${selecting ? ' selecting' : ''}" data-scroll="pane">
+        ${renderChips()}
+        ${account ? renderAccountBar(state.accounts[account]) : ''}
+        ${renderNotices(accounts)}
+        ${head}
+        ${rows ? `<ul class="messages">${rows}</ul>` : ''}
+        ${more}${empty}
+        ${footer}
+      </div>
+      ${dock ? `<div class="dock">${dock}</div>` : ''}
     </div>`;
-  sidebar.querySelector('.pane').scrollTop = scroll;
+  for (const [name, top] of scrolls) {
+    const el = sidebar.querySelector(`[data-scroll="${name}"]`);
+    if (el) el.scrollTop = top;
+  }
   const all = sidebar.querySelector('.pick-all');
   if (all) all.indeterminate = selecting && !allListed;
 }
@@ -440,11 +447,12 @@ function renderSection(kind, key) {
   if (!accounts.length) return '';
   const open = state.open[kind].has(key);
   const count = kind === 'spam' ? accounts.reduce((n, a) => n + (state.mail[a.id]?.spamUnread ?? 0), 0) : 0;
+  // Pinned to the bottom of the list column; the emails open above the title.
   return `<div class="recent-block">
+    ${open ? `<ul class="messages recent-list" data-scroll="${kind}">${sectionRows(kind, key)}</ul>` : ''}
     <button class="recent-toggle" data-action="toggle-section" data-kind="${kind}" data-key="${esc(key)}" aria-expanded="${open}">
       ${icon.chevron.replace('<svg', '<svg class="chevron"')}${SECTION[kind].title}${count ? `<span class="spam-count" title="${count} unread in spam">${count}</span>` : ''}
     </button>
-    ${open ? `<ul class="messages recent-list">${sectionRows(kind, key)}</ul>` : ''}
   </div>`;
 }
 

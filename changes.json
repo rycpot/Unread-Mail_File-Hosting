@@ -1,4 +1,5 @@
 {
+  "0.7.4": "Recently read and Spam are pinned to the bottom of the list and open upwards.",
   "0.7.3": "Recently read and Spam also in each provider's All view (e.g. All Gmail), combined for its accounts.",
   "0.7.2": "The email provider's icon now sits next to the Open in … button.",
   "0.7.1": "Recently read and Spam also under All accounts, combined for every account. Spam now lists unread spam only.",
