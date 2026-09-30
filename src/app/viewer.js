@@ -11,6 +11,8 @@
 
 import DOMPurify from '../vendor/purify.es.mjs';
 import { fmtDate, fmtDateTime } from './format.js';
+import { showMedia } from './media-player.js';
+import { mediaKind } from '../media-types.js';
 
 const VENDOR = chrome.runtime.getURL('src/vendor/');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -39,7 +41,7 @@ export function viewerKind(filename = '', mimeType = '') {
   if (['xlsx', 'xls', 'xlsm', 'ods'].includes(ext) || type.includes('spreadsheetml') || type === 'application/vnd.ms-excel' || type.includes('opendocument.spreadsheet')) return 'sheet';
   if (ext === 'csv' || type === 'text/csv') return 'csv';
   if (/^image\/(png|jpe?g|gif|webp|bmp|svg\+xml)$/.test(type) || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext)) return 'image';
-  return null;
+  return mediaKind(filename, mimeType);
 }
 
 // Plain text is recognised by content, never by extension (the method of the
@@ -145,13 +147,14 @@ export function openViewer(files, { index = 0, onDownload } = {}) {
     if (next >= 0 && next < files.length) show(next);
   };
   function onKey(e) {
-    const typing = e.target.closest?.('input, textarea');
+    const typing = e.target.closest?.('input:not([type="range"]), textarea');
     if (e.key === 'Escape' && !typing) {
       e.stopPropagation(); // the email behind stays open
       close();
     }
-    else if (e.key === 'ArrowLeft' && !typing) go(-1);
-    else if (e.key === 'ArrowRight' && !typing) go(1);
+    // (a focused seek or volume slider keeps the arrows)
+    else if (e.key === 'ArrowLeft' && !typing && !e.target.closest?.('input[type="range"]')) go(-1);
+    else if (e.key === 'ArrowRight' && !typing && !e.target.closest?.('input[type="range"]')) go(1);
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault();
       doPrint();
@@ -221,6 +224,15 @@ export function openViewer(files, { index = 0, onDownload } = {}) {
       else if (kind === 'sheet') await showSheet(ctx);
       else if (kind === 'csv') ready(showHtml(body, file.filename, sheetHtml([{ name: file.filename, rows: parseCsv(decodeText(bytes) ?? '') }])));
       else if (kind === 'image') ready(showImage(ctx.file, body));
+      else if (kind === 'video' || kind === 'audio') {
+        ready(showMedia({
+          file: ctx.file,
+          body,
+          kind,
+          sizeText: formatSize(bytes.length),
+          onUnplayable: () => alive() && noPreview(body, file, "Chrome can't play this file."),
+        }));
+      }
       else if (text != null) ready(showHtml(body, file.filename, `<pre class="plain">${esc(text)}</pre>`));
       else noPreview(body, file);
     } catch (e) {
@@ -237,9 +249,9 @@ function showStatus(body, text, error = false, busy = false) {
   body.innerHTML = `<div class="viewer-status${error ? ' error' : ''}">${busy ? '<span class="viewer-spinner"></span>' : ''}${esc(text)}</div>`;
 }
 
-function noPreview(body, file) {
+function noPreview(body, file, why = 'No preview is available for this type of file.') {
   body.innerHTML = `<div class="viewer-none">${ICON.file}
-    <p><strong>${esc(file.filename)}</strong><br>No preview is available for this type of file.</p>
+    <p><strong>${esc(file.filename)}</strong><br>${esc(why)}</p>
     <button class="tool-btn primary" data-v="download">${ICON.download}Download${file.size ? ` (${formatSize(file.size)})` : ''}</button></div>`;
 }
 

@@ -1,6 +1,7 @@
 // Background downloader for the offline cache: every email the app lists
 // (unread, Recently read, Sent, Drafts, Spam) is fetched with its inline
-// images and attachments as soon as it appears, so it opens instantly.
+// images and attachments as soon as it appears, so it opens instantly
+// (videos over 50 MB wait until they are opened).
 // Fetching never marks anything read. Runs in the service worker after each
 // check; the section lists (Recently read, Sent, Drafts, Spam) are re-read at
 // most every 15 minutes per account.
@@ -9,8 +10,11 @@ import { providers } from './providers/index.js';
 import { getAccounts, getMail, getSettings } from './storage.js';
 import * as cache from './cache-db.js';
 import { completeAndStore } from './message-fetch.js';
+import { mediaKind } from './media-types.js';
 
 const SECTIONS_EVERY = 15 * 60e3;
+// Videos larger than this download when opened (and are cached then).
+const VIDEO_PREFETCH_MAX = 50 * 1024 * 1024;
 const SECTION_FETCH = {
   recent: { folder: undefined, fetch: (p, a) => p.fetchRecentRead(a, 10) },
   spam: { folder: 'spam', fetch: (p, a) => p.fetchSpam?.(a, 20) },
@@ -150,8 +154,9 @@ async function prefetchAttachments(account, provider, msg) {
   if (!files.length) return;
   const keyOf = (a) => cache.attachmentKey(account.id, msg.folder, msg.id, a);
   await cache.markSeen('attachments', files.map(keyOf));
+  const bigVideo = (a) => mediaKind(a.filename, a.mimeType) === 'video' && (a.size ?? 0) > VIDEO_PREFETCH_MAX;
   const missing = [];
-  for (const a of files) if (!(await cache.hasAttachment(keyOf(a)))) missing.push(a);
+  for (const a of files) if (!bigVideo(a) && !(await cache.hasAttachment(keyOf(a)))) missing.push(a);
   if (!missing.length) return;
   let rest = missing;
   if (provider.getAttachments) {
