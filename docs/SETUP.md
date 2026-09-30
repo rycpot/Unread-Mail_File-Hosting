@@ -290,7 +290,7 @@ share: **x02** (top) and **Catbox**. Click one and the email area becomes a drop
 zone: drop files anywhere on it, or click it to choose files. Each file gets its
 own link; when the uploads finish the links are copied to the clipboard (one per
 line). Click any link (or the copy icon) to copy it again, or the arrow to open it.
-**Recent uploads** lists the last 20 with a preview (the image itself, or a tile
+**Recent uploads** lists the last 100 with a preview (the image itself, or a tile
 with the file type), size, and date and time. For x02 the list comes from your
 account, so it also shows files uploaded on the x02 website; for Catbox it lists
 the uploads made from here (Catbox has no way to list them). Esc, the ✕ or the
@@ -300,7 +300,6 @@ same icon closes the panel and brings the email back.
   Uploads are anonymous unless you add your userhash (catbox.moe → Manage
   account) in **Settings → Uploads → Catbox userhash**. Files uploaded with the
   userhash can be deleted from the list (trash icon); anonymous uploads can't be.
-  **Clear list** only empties the list; the files stay on Catbox.
 - **x02:** needs an API key from the x02 dashboard, in **Settings → Uploads → x02
   API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
   (1 hour to 30 days). The trash icon deletes a file from your x02 account.

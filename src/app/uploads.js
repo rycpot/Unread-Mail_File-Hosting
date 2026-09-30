@@ -1,7 +1,7 @@
 // File uploads to Catbox (catbox.moe) and x02 (x02.me), an independent module
 // of the app: the rail icons open a panel in place of the email view; any
 // files dropped on it (or chosen) are uploaded one link each, the links are
-// shown and copied to the clipboard, and the last 20 per service are kept on
+// shown and copied to the clipboard, and the last 100 per service are kept on
 // this computer.
 //
 // Catbox: POST https://catbox.moe/user/api.php, multipart reqtype=fileupload,
@@ -16,7 +16,7 @@ import { fmtDateTime } from './format.js';
 
 const MB = 1024 * 1024;
 const HISTORY_KEY = 'uploadHistory';
-const HISTORY_MAX = 20;
+const HISTORY_MAX = 100;
 const EXPIRY_MS = { '1h': 3600e3, '6h': 6 * 3600e3, '1d': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
 
 export const UPLOADERS = {
@@ -36,10 +36,16 @@ export const UPLOADERS = {
     },
     // The account's latest uploads, including ones made on the x02 website.
     async list(s) {
-      const res = await fetch(`https://up.x02.me/api/user/dashboard?page=1&limit=${HISTORY_MAX}`, { headers: { 'x-api-key': s.x02ApiKey.trim() } });
-      const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
-      return (body.data?.uploads ?? []).map((f) => ({
+      // Page by page (the server may return fewer per page than asked).
+      const uploads = [];
+      for (let page = 1; uploads.length < HISTORY_MAX && page <= 10; page++) {
+        const res = await fetch(`https://up.x02.me/api/user/dashboard?page=${page}&limit=${HISTORY_MAX}`, { headers: { 'x-api-key': s.x02ApiKey.trim() } });
+        const body = await res.json().catch(() => null);
+        if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
+        uploads.push(...(body.data?.uploads ?? []));
+        if (!body.data?.pagination?.hasNextPage || !body.data?.uploads?.length) break;
+      }
+      return uploads.slice(0, HISTORY_MAX).map((f) => ({
         url: f.url,
         name: f.originalName || f.filename,
         stored: f.filename,
@@ -146,11 +152,6 @@ async function addToHistory(service, entries) {
   await chrome.storage.local.set({ [HISTORY_KEY]: all });
 }
 
-async function clearHistory(service) {
-  const all = await readHistory();
-  delete all[service];
-  await chrome.storage.local.set({ [HISTORY_KEY]: all });
-}
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const formatSize = (n) => (n < 1024 ? `${n} B` : n < MB ? `${Math.round(n / 1024)} KB` : `${(n / MB).toFixed(1)} MB`);
@@ -207,7 +208,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   // includes uploads made elsewhere); Catbox has no such list, so it is the
   // uploads made here.
   async function entries(svc) {
-    const local = (await readHistory())[svc] ?? [];
+    const local = ((await readHistory())[svc] ?? []).slice(0, HISTORY_MAX);
     if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return { list: local };
     const r = remote.x02;
     if (!r) return { list: local, loading: true };
@@ -242,7 +243,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const note = loading ? '<p class="up-empty">Loading your x02 uploads…</p>'
       : error ? `<p class="up-empty error">Couldn't load your x02 uploads (${esc(error)}). Showing the ones made here.</p>` : '';
     const listHtml = list.length ? `<ul class="up-list">${list.map((e) => entryRowHtml(e, s)).join('')}</ul>`
-      : loading ? '' : `<p class="up-empty">${svc === 'x02' ? 'No uploads yet.' : 'Links you upload here stay listed (the last 20).'}</p>`;
+      : loading ? '' : `<p class="up-empty">${svc === 'x02' ? 'No uploads yet.' : 'Links you upload here stay listed (the last 100).'}</p>`;
     panel.innerHTML = `
       <div class="up-panel" data-service="${svc}">
         <header class="up-head">
@@ -263,7 +264,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         <section class="up-history">
           <h3>Recent uploads
             ${svc === 'x02' && u.ready(s) ? `<button type="button" class="up-icon small" data-u="refresh" title="Reload from x02">${ICON.refresh}</button>`
-              : list.length ? '<button type="button" class="link-btn" data-u="clear" title="Clears this list (the files stay on Catbox)">Clear list</button>' : ''}
+              : ''}
           </h3>
           ${note}${listHtml}
         </section>
@@ -375,9 +376,6 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       fetchRemote('x02');
     } else if (act === 'dismiss') {
       active[service] = active[service].filter((r) => String(r.id) !== el.dataset.row);
-      render();
-    } else if (act === 'clear') {
-      await clearHistory(service);
       render();
     } else if (act === 'choose' && !el.classList.contains('disabled') && !e.target.closest('input')) {
       el.querySelector('input[type="file"]').click();
