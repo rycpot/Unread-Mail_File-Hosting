@@ -185,7 +185,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     <button type="button" class="up-link" data-u="copy" data-url="${esc(e.url)}" title="Click to copy">${esc(e.url)}</button>
     <button type="button" class="up-icon" data-u="copy" data-url="${esc(e.url)}" title="Copy link">${ICON.copy}</button>
     <a class="up-icon" href="${esc(e.url)}" target="_blank" rel="noopener" title="Open in a new tab">${ICON.open}</a>
-    ${canDelete ? `<button type="button" class="up-icon danger" data-u="delete" data-url="${esc(e.url)}" title="Delete from ${UPLOADERS[service].name}">${ICON.trash}</button>` : ''}`;
+    ${canDelete ? `<button type="button" class="up-icon danger" data-u="delete" data-url="${esc(e.url)}" title="Delete from ${UPLOADERS[service].name}">${ICON.trash}</button>` : '<span class="up-icon" aria-hidden="true"></span>'}`;
 
   function activeRowHtml(r) {
     const tail = r.error ? `<span class="up-error">${esc(r.error)}</span>`

@@ -1016,7 +1016,7 @@ label.s-row { cursor: pointer; }
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   pointer-events: none;
 }
-.up-panel { display: flex; flex-direction: column; gap: 18px; width: min(760px, 100%); margin: 0 auto; padding: 22px 26px 30px; box-sizing: border-box; }
+.up-panel { display: flex; flex-direction: column; gap: 18px; width: min(1040px, 100%); margin: 0 auto; padding: 22px 26px 30px; box-sizing: border-box; }
 .up-head { display: flex; align-items: center; gap: 12px; }
 .up-logo { width: 40px; height: 40px; border-radius: 10px; flex: none; }
 .up-titles { flex: 1; min-width: 0; }
@@ -1049,13 +1049,18 @@ label.s-row { cursor: pointer; }
 .up-drop.disabled { cursor: not-allowed; opacity: 0.55; }
 .up-drop.disabled:hover { border-color: var(--border); }
 .up-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.up-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; }
+/* Every row: preview | name | fixed-width link | copy · open · delete, so the
+   links and icons line up in columns. */
+.up-row { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; }
 .up-row:first-child { border-top: 0; }
-.up-file { display: grid; gap: 2px; min-width: 0; flex: 1 1 30%; }
+.up-file { display: grid; gap: 2px; min-width: 0; }
 .up-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-meta { color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.up-result { flex: 1 1 55%; min-width: 0; display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.up-result { width: 482px; min-width: 0; display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .up-link {
+  flex: none;
+  width: 380px;
+  text-align: left;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1093,3 +1098,10 @@ label.s-row { cursor: pointer; }
 /* Upload keys in Settings: labels stay on one line, the field takes the rest. */
 .s-row .s-label { white-space: nowrap; }
 .menu .s-row input[type="password"] { flex: none; width: 140px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
+/* Narrow windows: the link column shrinks instead of pushing the icons out. */
+.up-panel { container-type: inline-size; }
+@container (max-width: 820px) {
+  .up-result { width: 362px; }
+  .up-link { width: 260px; }
+}
+span.up-icon:hover { background: none; }
