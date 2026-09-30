@@ -13,6 +13,11 @@ Trash or Deleted Items), without opening the webmail site.
   confirmation). Each account, and every **All** view combined, has collapsed
   **Recently read** and **Spam** sections pinned at the bottom (they open upwards); Spam lists unread spam
   only, with its count, and it can be read, deleted or marked *Not spam*.
+- **Write email** from any account: compose, reply, reply all and forward with a
+  minimal rich-text editor, inline images, attachments, address suggestions,
+  autosaved drafts and undo send.
+- **Attachments open in the app**: PDFs (with passwords), Word, Excel, CSV, images and
+  text, with Print.
 - **Proton** (free plan) through the mail.proton.me session signed in in Chrome:
   unread list, mark read/unread, delete and Recently read. Bodies and attachments
   are end-to-end encrypted and are decrypted inside the extension with OpenPGP.js,
@@ -52,6 +57,8 @@ load the folder unpacked.
 | Checking | Gmail, Outlook and Proton: a `chrome.alarms` alarm every 30 s to 15 min (Settings); Gmail reuses already-fetched headers, so a check without new mail is 3 requests (inbox count, unread list, spam count). iCloud, Yahoo and AOL: **push** — while Chrome runs, the helper keeps one IMAP IDLE connection per account (renewed every 25 min) and reports changes, which are refreshed within about a second; they are only re-checked every 10 min as a safety net, or at ≥ 2 min if push is unavailable. State lives in `chrome.storage.local`. |
 | Notifications | Routed by the macOS banner style for Chrome, which the user picks once (a required choice after the first account; changeable in Settings). **Persistent:** the first new email alerts at once (notification + soft two-note chime); while that notification stays open, further emails silently update it to "N new emails" with each provider's icon; once it is closed or clicked, the next email alerts again immediately. **Temporary** (macOS default): emails within 8 s of the last banner are merged into it silently, later ones get a fresh banner, and chimes are at least 20 s apart. With notifications off and sound on, chimes are at least 15 s apart. An email counts as new only if it was not listed before and arrived after the newest one already seen (IMAP: by UID); an account's first sync never alerts, and each email alerts at most once. |
 | Updates | The service worker compares the installed version with `manifest.json` on this branch every 6 h and shows a bar with the notes from `changes.json`. **Install update** asks the helper (`selfUpdate`) to download the branch ZIP from GitHub over HTTPS, check that it carries the same extension `key`, write it over the extension folder recorded by `install.sh` (keeping `src/config.js`), and re-run `install.sh`; the extension then reloads itself. Data lives in `chrome.storage`, so accounts and settings are kept. |
+| Sending | One draft model for all providers. Gmail: the MIME message (`src/compose/mime.js`) is uploaded as a draft (`upload/…/drafts`, multipart with `threadId`) and sent with `drafts.send`. Outlook: `createReply` / `createReplyAll` / `createForward` or a new message, then `PATCH` recipients/body, attachments (≤ 3 MB inline, larger via upload sessions) and `/send`; needs `Mail.Send`. iCloud/Yahoo/AOL: the helper `APPEND`s drafts to Drafts and sends over SMTP with the app password (iCloud: `smtp.mail.me.com:587` STARTTLS; Yahoo/AOL `:465`), then removes the draft and files a copy in Sent where the server does not. Proton: the draft body is OpenPGP-encrypted to the address key, attachments are uploaded as key packets + data + signature, and sending posts a package: Proton recipients get the session keys encrypted to their public key, others go out through Proton as normal email (`src/providers/proton-send.js`). Undo send: the app saves and prepares; the background (`queueSend`) waits the chosen 5–30 s, kept alive and backed by an alarm, then commits. |
+| Viewer | `src/app/viewer.js`: PDF.js (legacy build, scripting off) draws pages on canvases and asks for a password when needed; Word via docx-preview and Excel via read-excel-file are converted to HTML, sanitised with DOMPurify and shown in a sandboxed frame; printing renders a copy into a hidden frame. |
 | Caching | Lists of *Recently read* / *Spam* and the bodies of the last 30 opened or hovered emails (decrypted Proton ones included) are kept in memory and `chrome.storage.session`, which Chrome keeps in memory only and clears when it quits; nothing is written to disk. Reopening shows them at once; lists refresh in the background. Hovering an email for 250 ms fetches its body ahead of the click, without marking it read. |
 | Email safety | Each email is cleaned with DOMPurify, rendered in an iframe that cannot run scripts, and restricted by a CSP that blocks all network loads. Remote images are blocked until you choose *Show images*. |
 
@@ -73,12 +80,19 @@ src/providers/proton.js  Proton adapter (signed-in web session)
 src/providers/proton-crypto.js  Proton key unlocking and message/attachment decryption
 src/content/proton-session.js  passes Proton's encrypted persisted-session entry to the extension
 src/native.js            native messaging client for the helper
+src/compose/mime.js      MIME message builder (drafts, SMTP, Gmail)
+src/app/compose.js       compose window (editor, recipients, attachments, drafts, send)
+src/app/contacts.js      address suggestions
+src/app/viewer.js        attachment viewer
+src/providers/proton-send.js  Proton draft/attachment encryption and send packages
 src/update.js            update check against this GitHub branch
 changes.json             one line per version, shown in the update bar
 helper/                  IMAP helper and its installer
 src/app/                 full-tab UI (app.html / app.css / app.js / render-email.js)
 src/vendor/              DOMPurify 3.4.16 (Apache-2.0 / MPL-2.0), OpenPGP.js 6.3.2 (LGPL-3.0),
-                         postal-mime 4.0.0 (MIT-0)
+                         postal-mime 4.0.0 (MIT-0), PDF.js 6.3.289 (Apache-2.0),
+                         docx-preview 0.4.1 (Apache-2.0), JSZip 3.10.2 (MIT),
+                         read-excel-file 9.3.10 (MIT)
 icons/providers/         provider icons used in the rail and list
 ```
 

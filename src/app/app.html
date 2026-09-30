@@ -16,6 +16,7 @@
       <span class="total" id="total" hidden></span>
     </div>
     <div class="topbar-actions">
+      <button class="tool-btn primary compose-btn" data-action="compose" title="New email">Compose</button>
       <span class="last-checked" id="lastChecked"></span>
       <button class="icon-btn" id="refreshAll" title="Refresh all accounts" aria-label="Refresh all accounts"></button>
       <div class="menu-wrap">
@@ -48,6 +49,21 @@
             <label class="check-label"><input type="checkbox" id="soundEnabled"> Notification sound</label>
             <button type="button" class="link-btn" id="testNotify">Test</button>
           </div>
+          <label class="row">
+            <span>Undo send</span>
+            <select id="undoSendSeconds">
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="20">20 seconds</option>
+              <option value="30">30 seconds</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>Your name</span>
+            <input type="text" id="senderName" placeholder="Shown to recipients" autocomplete="name" spellcheck="false">
+          </label>
+          <p class="settings-note">Your name is used for iCloud, Yahoo and AOL. Gmail, Outlook and Proton use the name set
+            in each service.</p>
           <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
           <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
           <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>
@@ -148,6 +164,8 @@
       </div>
     </form>
   </dialog>
+
+  <div class="send-bar" id="sendBar" aria-live="polite"></div>
 
   <div class="toast" id="toast" role="status" hidden></div>
 </body>

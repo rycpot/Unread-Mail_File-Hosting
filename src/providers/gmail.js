@@ -64,6 +64,13 @@ export const gmail = {
 
   // ---------- Sent, Drafts, sending ----------
 
+  // Your display name as Gmail shows it to recipients.
+  async senderName(account) {
+    const res = await apiFetch(account, `${API}/settings/sendAs`);
+    const primary = (res.sendAs ?? []).find((x) => x.isPrimary) ?? res.sendAs?.[0];
+    return primary?.displayName ?? '';
+  },
+
   async fetchSent(account, limit) {
     const list = await apiFetch(account, `${API}/messages?labelIds=SENT&maxResults=${limit}`);
     return headers(account, list.messages ?? []);

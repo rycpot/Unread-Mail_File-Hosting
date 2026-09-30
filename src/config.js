@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   // How macOS shows Chrome's notifications (System Settings → Notifications →
   // Google Chrome); 'temporary' is the macOS default.
   bannerStyle: 'temporary',
+  undoSendSeconds: 10,
+  senderName: '',
 };
 
 // How many unread messages to keep per account in the sidebar.

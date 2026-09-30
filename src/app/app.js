@@ -9,6 +9,9 @@ import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
 import { callHelper } from '../native.js';
 import { compareVersions, currentVersion } from '../update.js';
 import { openViewer, viewerKind } from './viewer.js';
+import { closeWindow, initCompose, isComposeOpen, openCompose } from './compose.js';
+import { rememberAddresses } from './contacts.js';
+import { uiIcons } from './ui-icons.js';
 
 // ---------- icons ----------
 
@@ -50,8 +53,8 @@ const state = {
   // "Recently read" and "Spam" sections, keyed by account id, or "*" for the
   // combined ones under All accounts: which are expanded, and what they list
   // ({ loading, messages: [{ accountId, id, … }], error }).
-  open: { recent: new Set(), spam: new Set() },
-  sections: { recent: new Map(), spam: new Map() },
+  open: { recent: new Set(), sent: new Set(), drafts: new Set(), spam: new Set() },
+  sections: { recent: new Map(), sent: new Map(), drafts: new Map(), spam: new Map() },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -149,6 +152,8 @@ function renderTopbar() {
   $('notifyEnabled').checked = state.settings.notifyEnabled;
   $('soundEnabled').checked = state.settings.soundEnabled;
   $('bannerStyle').value = state.settings.bannerStyle;
+  $('undoSendSeconds').value = String(state.settings.undoSendSeconds ?? 10);
+  if (document.activeElement !== $('senderName')) $('senderName').value = state.settings.senderName ?? '';
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
@@ -378,7 +383,7 @@ function renderSidebar() {
   // Scroll positions survive the re-render (the list and each open section).
   const scrolls = [...sidebar.querySelectorAll('[data-scroll]')].map((el) => [el.dataset.scroll, el.scrollTop]);
   const key = sectionKey();
-  const dock = key ? renderSection('recent', key) + renderSection('spam', key) : '';
+  const dock = key ? KINDS.map((kind) => renderSection(kind, key)).join('') : '';
   sidebar.innerHTML = `${renderRail()}
     <div class="pane-col">
       <div class="pane${selecting ? ' selecting' : ''}" data-scroll="pane">
@@ -408,10 +413,15 @@ function renderSidebar() {
 // The spam count comes from the regular checks.
 const RECENT_LIMIT = 10;
 const SPAM_LIMIT = 20;
+const SENT_LIMIT = 5;
+const DRAFTS_LIMIT = 3;
 const SECTION = {
   recent: { title: 'Recently read', empty: 'No read emails in the inbox.', fetch: (p, a) => p.fetchRecentRead(a, RECENT_LIMIT), limit: RECENT_LIMIT },
+  sent: { title: 'Sent', empty: 'Nothing sent yet.', fetch: (p, a) => p.fetchSent(a, SENT_LIMIT), limit: SENT_LIMIT, folder: 'sent', toLine: true },
+  drafts: { title: 'Drafts', empty: 'No drafts.', fetch: (p, a) => p.fetchDrafts(a, DRAFTS_LIMIT), limit: DRAFTS_LIMIT, folder: 'drafts', toLine: true },
   spam: { title: 'Spam', empty: 'No unread spam.', fetch: (p, a) => p.fetchSpam(a, SPAM_LIMIT), folder: 'spam' },
 };
+const KINDS = ['recent', 'sent', 'drafts', 'spam'];
 
 // The section key for the current view.
 const sectionKey = () => state.view.account ?? (state.view.provider ? `p:${state.view.provider}` : '*');
@@ -427,7 +437,7 @@ const isSelected = (accountId, messageId, folder) =>
 
 function sectionRows(kind, key) {
   const r = state.sections[kind].get(key);
-  const { folder, empty } = SECTION[kind];
+  const { folder, empty, toLine } = SECTION[kind];
   if (!r || r.loading) return '<li class="recent-note">Loading…</li>';
   const notes = (r.errors ?? []).map((e) => `<li class="recent-note error">${esc(e)}</li>`).join('');
   if (!r.messages.length) return notes || `<li class="recent-note">${empty}</li>`;
@@ -436,8 +446,8 @@ function sectionRows(kind, key) {
     const acct = state.accounts[msg.accountId];
     return `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(msg.accountId, msg.id, folder) ? ' selected' : ''}">
       <span class="lead">${combined ? pico(acct?.provider) : ''}</span>
-      <button class="msg" data-action="open" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}" data-list="${esc(key)}"${folder ? ` data-folder="${folder}"` : ''}>
-        <span class="msg-from">${esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
+      <button class="msg" data-action="${kind === 'drafts' ? 'open-draft' : 'open'}" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}" data-list="${esc(key)}"${folder ? ` data-folder="${folder}"` : ''}>
+        <span class="msg-from">${toLine ? `${kind === 'drafts' ? '<span class="draft-tag">Draft</span>' : ''}${esc(msg.to?.length ? `To: ${msg.to.map(displayName).join(', ')}` : '(no recipients)')}` : esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
         <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
         ${combined ? `<span class="msg-acct">${esc(acct?.email ?? '')}</span>` : ''}
       </button></li>`;
@@ -497,7 +507,7 @@ function saveSectionCache() {
 async function restoreSectionCache() {
   try {
     const { sectionCache } = await chrome.storage.session.get('sectionCache');
-    for (const kind of ['recent', 'spam']) {
+    for (const kind of KINDS) {
       for (const [key, r] of Object.entries(sectionCache?.[kind] ?? {})) state.sections[kind].set(key, r);
     }
   } catch {
@@ -508,7 +518,7 @@ async function restoreSectionCache() {
 function reloadOpenSections() {
   const key = sectionKey();
   if (!key) return;
-  for (const kind of ['recent', 'spam']) if (state.open[kind].has(key)) loadSection(kind, key);
+  for (const kind of KINDS) if (state.open[kind].has(key)) loadSection(kind, key);
 }
 
 // Every listed copy of an email in the sections of one kind (it can be in an
@@ -918,9 +928,9 @@ async function setRead(id, messageId, read, folder) {
 async function trashMessage(id, messageId, folder) {
   const a = state.accounts[id];
   forgetBody(id, messageId, folder);
-  if (folder === 'spam') {
+  if (folder) {
     await providers[a.provider].trash(a, messageId, { folder });
-    await leaveSpamMessage(id, messageId);
+    await leaveSectionMessage(folder === 'spam' ? 'spam' : 'sent', id, messageId);
     toast(a.provider === 'outlook' ? 'Moved to Deleted Items' : 'Moved to Trash');
     return;
   }
@@ -951,14 +961,14 @@ function closeReader() {
 
 // A spam email left the Spam folder (deleted or not spam): drop it from the
 // list, fix the count and open its neighbour.
-async function leaveSpamMessage(id, messageId) {
-  const gone = sectionItems('spam', id, messageId)[0];
-  const next = sectionNeighbour('spam', id, messageId);
+async function leaveSectionMessage(kind, id, messageId) {
+  const gone = sectionItems(kind, id, messageId)[0];
+  const next = sectionNeighbour(kind, id, messageId);
   const list = state.selected?.list;
-  dropFromSections('spam', id, messageId);
+  dropFromSections(kind, id, messageId);
   // Opened emails were marked read already, so only unread ones change the count.
-  if (gone && gone.read === false) await adjustSpamUnread(id, -1);
-  if (next) openMessage(next.accountId, next.id, { folder: 'spam', list });
+  if (kind === 'spam' && gone && gone.read === false) await adjustSpamUnread(id, -1);
+  if (next) openMessage(next.accountId, next.id, { folder: SECTION[kind].folder, list });
   else closeReader();
 }
 
@@ -967,7 +977,7 @@ async function notSpam(id, messageId) {
   forgetBody(id, messageId, 'spam');
   const failed = await providers[a.provider].notSpam(a, [messageId]);
   if (failed.length) throw new Error("Couldn't move it to the inbox. Try again.");
-  await leaveSpamMessage(id, messageId);
+  await leaveSectionMessage('spam', id, messageId);
   toast('Moved to Inbox');
   refreshOne(id);
 }
@@ -1105,6 +1115,7 @@ async function openMessage(id, messageId, { folder, list } = {}) {
     const msg = await fetchBody(id, messageId, folder);
     if (seq !== openSeq) return;
     state.message = msg;
+    rememberAddresses([msg.from, ...(msg.to ?? []), ...(msg.cc ?? [])], 1);
     renderReader();
     // An encrypted body that could not be shown does not count as read.
     if (state.settings.markReadOnOpen && !msg.isRead && !msg.encrypted) {
@@ -1181,10 +1192,19 @@ function renderReaderToolbar() {
   const msg = state.message;
   if (!bar || !msg) return;
   const providerName = providers[state.accounts[msg.accountId]?.provider]?.name ?? '';
+  const btn = (action, iconHtml, label, extra = '') => `<button class="tool-btn icon-only${extra}" data-action="${action}" title="${label}" aria-label="${label}">${iconHtml}</button>`;
+  const replyAll = [...(msg.to ?? []), ...(msg.cc ?? [])].length > 1;
   bar.innerHTML = `
-    <button class="tool-btn" data-action="${msg.isRead ? 'mark-unread' : 'mark-read'}">${msg.isRead ? icon.mail + 'Mark unread' : icon.mailOpen + 'Mark read'}</button>
-    ${msg.folder === 'spam' ? `<button class="tool-btn" data-action="not-spam">${icon.inbox}Not spam</button>` : ''}
-    <button class="tool-btn danger" data-action="trash">${icon.trash}Delete</button>
+    <span class="tb-group">
+      ${btn('reply', uiIcons.reply, 'Reply')}
+      ${replyAll ? btn('reply-all', uiIcons['reply-all'], 'Reply all') : ''}
+      ${btn('forward', uiIcons.forward, 'Forward')}
+    </span>
+    <span class="tb-group">
+      ${msg.isRead ? btn('mark-unread', uiIcons['mark-unread'], 'Mark as unread') : btn('mark-read', icon.mailOpen, 'Mark as read')}
+      ${msg.folder === 'spam' ? `<button class="tool-btn" data-action="not-spam">${icon.inbox}Not spam</button>` : ''}
+      ${btn('trash', uiIcons.delete, 'Delete', ' danger')}
+    </span>
     <span class="spacer"></span>
     ${msg.webUrl ? `<span class="open-web">${pico(state.accounts[msg.accountId]?.provider, 'open-web-icon')}<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button></span>` : ''}`;
 }
@@ -1295,6 +1315,18 @@ document.addEventListener('click', async (e) => {
       return openAccountMenu(el, id);
     case 'open':
       return openMessage(id, messageId, { folder: el.dataset.folder, list: el.dataset.list });
+    case 'open-draft':
+      return openCompose({ mode: 'draft', accountId: id, draftRef: messageId });
+    case 'compose':
+      return openCompose({ mode: 'new' });
+    case 'reply':
+    case 'reply-all':
+    case 'forward':
+      return openCompose({
+        mode: { reply: 'reply', 'reply-all': 'replyAll', forward: 'forward' }[action],
+        accountId: state.message.accountId,
+        original: state.message,
+      });
     case 'signin':
       return addAccount(state.accounts[id].provider, state.accounts[id].email);
     case 'refresh-account':
@@ -1363,6 +1395,8 @@ $('testNotify').addEventListener('click', async () => {
   else if (res && !res.ok) toast(res.error, { error: true });
 });
 $('showHidden').addEventListener('change', (e) => saveSettings({ showHidden: e.target.checked }));
+$('undoSendSeconds').addEventListener('change', (e) => saveSettings({ undoSendSeconds: Number(e.target.value) }));
+$('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMenus());
 
 $('redirectUri').textContent = chrome.identity.getRedirectURL();
@@ -1390,6 +1424,8 @@ state.view = loadView();
 await restoreSectionCache();
 await restoreBodies();
 await load();
+// Seed address suggestions with the senders of listed mail (lightly weighted).
+rememberAddresses(Object.values(state.mail).flatMap((m) => (m?.messages ?? []).map((x) => x.from)), 0.2);
 await fillClientIds();
 renderTopbar();
 renderSidebar();
@@ -1410,6 +1446,115 @@ for (const btn of document.querySelectorAll('#bannerDialog [data-banner]')) {
   });
 }
 askBannerStyle();
+
+// ---------- compose and sending ----------
+
+// The account a new email starts from: the one being viewed, else the one the
+// open email belongs to, else the last one used.
+function defaultFromAccount() {
+  const live = liveAccounts().filter((a) => !a.hidden);
+  if (state.view.account && state.accounts[state.view.account]) return state.view.account;
+  if (state.message?.accountId && state.accounts[state.message.accountId]) return state.message.accountId;
+  if (state.view.provider) {
+    const first = live.find((a) => a.provider === state.view.provider);
+    if (first) return first.id;
+  }
+  let last = null;
+  try {
+    last = localStorage.getItem('lastFrom');
+  } catch {}
+  return state.accounts[last] ? last : live[0]?.id ?? Object.keys(state.accounts)[0] ?? null;
+}
+
+const senderNames = new Map();
+initCompose({
+  accounts: () => state.accounts,
+  toast,
+  defaultAccountId: defaultFromAccount,
+  attachmentBytes,
+  senderName: async (account) => {
+    const p = providers[account.provider];
+    if (p.senderName) {
+      if (!senderNames.has(account.id)) senderNames.set(account.id, p.senderName(account).catch(() => ''));
+      const name = await senderNames.get(account.id);
+      if (name) return name;
+    }
+    return state.settings.senderName ?? '';
+  },
+  onDraftsChanged: (accountId) => {
+    for (const [key, r] of state.sections.drafts) {
+      if (state.open.drafts.has(key) && sectionAccounts(key).some((a) => a.id === accountId)) loadSection('drafts', key);
+      else if (r) state.sections.drafts.delete(key);
+    }
+  },
+  onSending: (accountId) => {
+    try {
+      localStorage.setItem('lastFrom', accountId);
+    } catch {}
+  },
+});
+
+// Emails waiting to be sent (undo), sending, sent or failed. The queue lives
+// in the background (chrome.storage.session), so this bar is the same in every
+// view and survives reopening the tab.
+let sendTick = null;
+async function renderSendBar() {
+  const { pendingSends = [] } = await chrome.storage.session.get('pendingSends');
+  const bar = $('sendBar');
+  const now = Date.now();
+  bar.innerHTML = pendingSends.map((e) => {
+    const to = `${(e.summary?.to ?? []).join(', ')}${e.summary?.more ? ` +${e.summary.more}` : ''}`;
+    if (e.status === 'pending') {
+      const left = Math.max(0, Math.ceil((e.sendAt - now) / 1000));
+      const pct = e.delay ? Math.max(0, Math.min(100, ((e.sendAt - now) / e.delay) * 100)) : 0;
+      return `<div class="send-item"><span class="send-text">Sending to ${esc(to)}…</span>
+        <button class="send-undo" data-send-undo="${esc(e.id)}">Undo</button><span class="send-left">${left}s</span>
+        <span class="send-progress" style="width:${pct}%"></span></div>`;
+    }
+    if (e.status === 'sending') return `<div class="send-item"><span class="send-text">Sending to ${esc(to)}…</span></div>`;
+    if (e.status === 'sent') return `<div class="send-item ok"><span class="send-text">Sent to ${esc(to)}</span></div>`;
+    return `<div class="send-item failed"><span class="send-text" title="${esc(e.error ?? '')}">Couldn't send: ${esc(e.error ?? 'unknown error')}. It is still in Drafts.</span>
+      ${e.draftRef ? `<button class="send-undo" data-send-open="${esc(e.id)}">Open draft</button>` : ''}
+      <button class="send-x" data-send-dismiss="${esc(e.id)}" aria-label="Dismiss">×</button></div>`;
+  }).join('');
+  const pending = pendingSends.some((e) => e.status === 'pending');
+  if (pending && !sendTick) sendTick = setInterval(renderSendBar, 250);
+  if (!pending && sendTick) {
+    clearInterval(sendTick);
+    sendTick = null;
+  }
+}
+$('sendBar').addEventListener('click', async (e) => {
+  const undo = e.target.closest('[data-send-undo]');
+  const open = e.target.closest('[data-send-open]');
+  const dismiss = e.target.closest('[data-send-dismiss]');
+  if (undo) {
+    const res = await chrome.runtime.sendMessage({ cmd: 'cancelSend', id: undo.dataset.sendUndo });
+    if (!res?.ok) return toast(res?.error ?? 'Too late to undo', { error: true });
+    toast('Sending undone');
+    openCompose({ mode: 'draft', accountId: res.accountId, draftRef: res.draftRef });
+  } else if (open) {
+    const { pendingSends = [] } = await chrome.storage.session.get('pendingSends');
+    const item = pendingSends.find((x) => x.id === open.dataset.sendOpen);
+    await chrome.runtime.sendMessage({ cmd: 'dismissSend', id: open.dataset.sendOpen });
+    if (item) openCompose({ mode: 'draft', accountId: item.accountId, draftRef: item.draftRef });
+  } else if (dismiss) {
+    await chrome.runtime.sendMessage({ cmd: 'dismissSend', id: dismiss.dataset.sendDismiss });
+  }
+});
+let lastSent = new Set();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session' || !changes.pendingSends) return;
+  renderSendBar();
+  // Fresh Sent / Drafts lists once something was sent.
+  const sent = new Set((changes.pendingSends.newValue ?? []).filter((e) => e.status === 'sent').map((e) => e.id));
+  if ([...sent].some((id) => !lastSent.has(id))) {
+    for (const kind of ['sent', 'drafts']) for (const key of state.sections[kind].keys()) state.sections[kind].delete(key);
+    reloadOpenSections();
+  }
+  lastSent = sent;
+});
+renderSendBar();
 
 // ---------- update banner ----------
 //

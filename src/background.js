@@ -92,6 +92,125 @@ function onPushMessage(msg) {
   }
 }
 
+// ---------- sending with undo ----------
+//
+// The app saves the final draft and prepares it (everything that needs the
+// app tab, like Proton encryption), then queues it here. It is sent after the
+// undo delay from Settings, so switching mailboxes, opening other emails or
+// even closing the app tab does not stop it; Undo cancels it and the email
+// stays in Drafts. The queue is in chrome.storage.session: if Chrome quits
+// during the countdown nothing is sent and the draft stays in Drafts.
+
+const PENDING = 'pendingSends';
+const sendTimers = new Map();
+let keepAliveTimer = null;
+
+const getPending = async () => (await chrome.storage.session.get(PENDING))[PENDING] ?? [];
+const setPending = (list) => chrome.storage.session.set({ [PENDING]: list });
+
+// Serialise read-modify-write of the queue.
+let queueLock = Promise.resolve();
+function withQueue(fn) {
+  const run = queueLock.then(async () => {
+    const list = await getPending();
+    const result = await fn(list);
+    await setPending(list);
+    return result;
+  });
+  queueLock = run.catch(() => {});
+  return run;
+}
+
+async function queueSend(item) {
+  const { undoSendSeconds } = await getSettings();
+  const delay = Math.max(0, Number(undoSendSeconds) || 10) * 1000;
+  const entry = { ...item, id: crypto.randomUUID(), sendAt: Date.now() + delay, delay, status: 'pending' };
+  await withQueue((list) => list.push(entry));
+  scheduleSend(entry);
+  return entry.id;
+}
+
+function scheduleSend(entry) {
+  clearTimeout(sendTimers.get(entry.id));
+  sendTimers.set(entry.id, setTimeout(() => commitSend(entry.id), Math.max(0, entry.sendAt - Date.now())));
+  // A fallback wake-up in case the worker is stopped during the countdown.
+  chrome.alarms.create(`send:${entry.id}`, { when: entry.sendAt + 1000 });
+  keepAlive();
+}
+
+// Extension API calls keep the service worker running while emails wait.
+function keepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(async () => {
+    const list = await getPending();
+    if (!list.some((e) => e.status === 'pending' || e.status === 'sending')) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+      return;
+    }
+    chrome.runtime.getPlatformInfo();
+  }, 20e3);
+}
+
+async function commitSend(id) {
+  clearTimeout(sendTimers.get(id));
+  sendTimers.delete(id);
+  chrome.alarms.clear(`send:${id}`);
+  const entry = await withQueue((list) => {
+    const e = list.find((x) => x.id === id);
+    if (!e || e.status !== 'pending') return null;
+    e.status = 'sending';
+    return { ...e };
+  });
+  if (!entry) return;
+  let status = 'sent';
+  let error = null;
+  try {
+    const account = (await getAccounts())[entry.accountId];
+    if (!account) throw new Error('The account was removed');
+    await providers[account.provider].commitSend(account, entry.sendable);
+  } catch (e) {
+    status = 'failed';
+    error = e.message;
+    console.warn('[send]', e);
+  }
+  await withQueue((list) => {
+    const e = list.find((x) => x.id === id);
+    if (e) Object.assign(e, { status, error, sendable: null, doneAt: Date.now() });
+  });
+  if (status === 'sent') {
+    const account = (await getAccounts())[entry.accountId];
+    if (account) refreshAccount(account).catch(() => {});
+  }
+  // Results stay visible in the app for a little while.
+  setTimeout(() => withQueue((list) => {
+    const i = list.findIndex((x) => x.id === id && x.status === 'sent');
+    if (i !== -1) list.splice(i, 1);
+  }), 8000);
+}
+
+async function cancelSend(id) {
+  const entry = await withQueue((list) => {
+    const i = list.findIndex((x) => x.id === id && x.status === 'pending');
+    return i === -1 ? null : list.splice(i, 1)[0];
+  });
+  if (!entry) return { ok: false, error: 'It is already being sent' };
+  clearTimeout(sendTimers.get(id));
+  sendTimers.delete(id);
+  chrome.alarms.clear(`send:${id}`);
+  return { ok: true, accountId: entry.accountId, draftRef: entry.draftRef };
+}
+
+// On worker start: send what is due, re-arm the rest.
+async function resumeSends() {
+  for (const e of await getPending()) {
+    if (e.status !== 'pending') continue;
+    if (e.sendAt <= Date.now()) commitSend(e.id);
+    else scheduleSend(e);
+  }
+}
+resumeSends();
+
 // Content scripts only reach pages loaded after the extension was installed
 // or updated, so add the Proton session script to mail.proton.me tabs that
 // are already open.
@@ -130,6 +249,7 @@ startPush();
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === UPDATE_ALARM) return checkUpdateQuietly();
+  if (alarm.name.startsWith('send:')) return commitSend(alarm.name.slice(5));
   if (alarm.name !== ALARM) return;
   if (!pushPort) startPush();
   const { pollMinutes } = await getSettings();
@@ -185,6 +305,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.cmd === 'testNotification') {
     testNotification().then(() => sendResponse({ ok: true }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.cmd === 'queueSend' && sender.id === chrome.runtime.id && msg.item) {
+    queueSend(msg.item).then((id) => sendResponse({ ok: true, id }), (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.cmd === 'cancelSend' && sender.id === chrome.runtime.id) {
+    cancelSend(msg.id).then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.cmd === 'dismissSend' && sender.id === chrome.runtime.id) {
+    withQueue((list) => {
+      const i = list.findIndex((x) => x.id === msg.id && x.status !== 'pending' && x.status !== 'sending');
+      if (i !== -1) list.splice(i, 1);
+    }).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (msg?.cmd === 'checkUpdate') {

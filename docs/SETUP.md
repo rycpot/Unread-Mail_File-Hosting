@@ -71,8 +71,10 @@ only addresses listed as test users can sign in; others get "Access blocked".)
      URI `https://gnkolniepchhhfhnopbhgbnedkplhjjj.chromiumapp.org/`
 2. Click **Register** and copy the **Application (client) ID**.
 3. **API permissions → Add a permission → Microsoft Graph → Delegated**: add
-   `Mail.ReadWrite` and `offline_access` (`User.Read` is there by default).
-   Personal accounts consent for themselves; no admin consent is needed.
+   `Mail.ReadWrite`, `Mail.Send` and `offline_access` (`User.Read` is there by
+   default). Personal accounts consent for themselves; no admin consent is needed.
+   Accounts connected before `Mail.Send` was added are asked to approve sending
+   once, the first time they send.
 
 No client secret is created: the extension uses the PKCE flow.
 
@@ -219,6 +221,41 @@ under **Settings → Notification banners**; keep the two the same:
   close it, after which the next email alerts again straight away.
 - **Temporary:** mail arriving after a banner has gone gets a new banner; chimes are
   at least 20 seconds apart.
+
+## 8. Writing email
+
+**Compose** (top bar) opens a window at the bottom right; the arrows button makes it
+fill the app. **Reply**, **Reply all** and **Forward** are in the reader's toolbar.
+
+- **From** starts as the account you are viewing (or the one the open email belongs
+  to); the dropdown lists every account. Check it before sending.
+- To/Cc/Bcc suggest addresses from mail you have seen and sent (kept on this
+  computer only).
+- Formatting: bold, italic, alignment, bulleted and numbered lists, links, undo and
+  redo (⌘B, ⌘I, ⌘K, ⌘Z, ⇧⌘Z; ⌘↩ sends). Anything pasted comes in as plain text.
+- Images dropped or pasted into the text go inline, scaled down to 1920 px on the
+  longest side and shown at most 600 px wide. Other files, or anything dropped on
+  the attach area (paperclip), are attached as they are; 25 MB in total.
+- Emails are sent without a font of their own, so each recipient's mail app shows
+  them in its usual font.
+- Drafts save to the account's Drafts folder as you type and when you close the
+  window; reopen them from **Drafts** at the bottom of the list.
+- **Send** waits for the undo delay (Settings → Undo send: 5, 10, 20 or 30 s). The
+  bar at the bottom counts down in every view, even if the app tab is closed;
+  **Undo** reopens the email. If Chrome quits during the countdown the email is
+  not sent and stays in Drafts.
+- For iCloud, Yahoo and AOL, set **Settings → Your name** (Gmail, Outlook and
+  Proton use the name set in each service). They send through the same app
+  passwords (SMTP), so the helper needs updating once (the update does it).
+- Proton: emails to Proton addresses are end-to-end encrypted with the recipient's
+  key; other addresses get a normal email, as in Proton's web app. Because this
+  uses Proton's private web API, send yourself a test first.
+
+## 9. Opening attachments
+
+PDFs (including password-protected statements), Word (.docx), Excel (.xlsx), CSV,
+images and text files open in the app; everything else downloads. The viewer has
+Download and Print (⌘P) at the top right. Old .doc/.xls files download only.
 
 ## Troubleshooting
 
