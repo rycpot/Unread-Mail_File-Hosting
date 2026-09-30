@@ -26,6 +26,17 @@ const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 
 const MS_BASE = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const MS_SCOPES = ['openid', 'offline_access', 'User.Read', 'Mail.ReadWrite'];
+// Asked for at sign-in; accounts connected before sending existed are asked
+// once, when they first send (see SendPermissionError).
+const MS_SEND_SCOPE = 'Mail.Send';
+
+export class SendPermissionError extends Error {
+  constructor(account) {
+    super(`Allow ${account.email} to send email: sign in once more to approve sending.`);
+    this.name = 'SendPermissionError';
+    this.account = account;
+  }
+}
 
 async function clientId(provider) {
   const ids = await getClientIds();
@@ -100,11 +111,13 @@ async function pkcePair() {
   return { verifier, challenge };
 }
 
-async function msToken(body) {
+// scopes: those to ask for; a refresh asks for what was granted before, so an
+// account that never approved sending keeps working without it.
+async function msToken(body, scopes = MS_SCOPES) {
   const res = await fetch(`${MS_BASE}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: await clientId('microsoft'), scope: MS_SCOPES.join(' '), ...body }),
+    body: new URLSearchParams({ client_id: await clientId('microsoft'), scope: scopes.join(' '), ...body }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -116,10 +129,20 @@ async function msToken(body) {
     accessToken: json.access_token,
     expiresAt: Date.now() + Number(json.expires_in ?? 3600) * 1000,
     refreshToken: json.refresh_token,
+    scope: json.scope ?? '',
   };
 }
 
-async function microsoftAuthorize({ loginHint, interactive }) {
+const canSend = (token) => /(^|\s|\/)mail\.send(\s|$)/i.test(token?.scope ?? '');
+
+export async function hasOutlookSendPermission(account) {
+  return canSend(await getAuth(account.id));
+}
+
+// send: also ask for Mail.Send. Interactive sign-ins always do; silent ones
+// only for accounts that already approved it.
+async function microsoftAuthorize({ loginHint, interactive, send = interactive }) {
+  const scopes = send ? [...MS_SCOPES, MS_SEND_SCOPE] : MS_SCOPES;
   const msClientId = await clientId('microsoft');
   const { verifier, challenge } = await pkcePair();
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
@@ -129,7 +152,7 @@ async function microsoftAuthorize({ loginHint, interactive }) {
     response_type: 'code',
     response_mode: 'query',
     redirect_uri: REDIRECT_URI,
-    scope: MS_SCOPES.join(' '),
+    scope: scopes.join(' '),
     code_challenge: challenge,
     code_challenge_method: 'S256',
     state,
@@ -140,7 +163,7 @@ async function microsoftAuthorize({ loginHint, interactive }) {
   if (params.get('state') !== state) throw new Error('Microsoft sign-in returned a mismatched state');
   const code = params.get('code');
   if (!code) throw new Error('Microsoft did not return an authorization code');
-  return msToken({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, code_verifier: verifier });
+  return msToken({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, code_verifier: verifier }, scopes);
 }
 
 const authorize = { gmail: googleAuthorize, outlook: microsoftAuthorize };
@@ -154,7 +177,7 @@ export async function signIn(provider, loginHint) {
 export async function saveToken(id, token) {
   const prev = await getAuth(id);
   // Keep an older refresh token if the new response did not include one.
-  await setAuth(id, { ...token, refreshToken: token.refreshToken ?? prev?.refreshToken });
+  await setAuth(id, { ...token, refreshToken: token.refreshToken ?? prev?.refreshToken, scope: token.scope || prev?.scope });
 }
 
 // Coalesce concurrent renewals for the same account within one context.
@@ -175,7 +198,8 @@ async function renew(account, forceRenew) {
   }
   if (account.provider === 'outlook' && cached?.refreshToken) {
     try {
-      const token = await msToken({ grant_type: 'refresh_token', refresh_token: cached.refreshToken });
+      const scopes = canSend(cached) ? [...MS_SCOPES, MS_SEND_SCOPE] : MS_SCOPES;
+      const token = await msToken({ grant_type: 'refresh_token', refresh_token: cached.refreshToken }, scopes);
       await saveToken(account.id, token);
       return token.accessToken;
     } catch (e) {
@@ -183,7 +207,7 @@ async function renew(account, forceRenew) {
       if (e.code !== 'invalid_grant' && e.code !== 'interaction_required') throw e;
     }
   }
-  const token = await authorize[account.provider]({ loginHint: account.email, interactive: false });
+  const token = await authorize[account.provider]({ loginHint: account.email, interactive: false, send: canSend(cached) });
   await saveToken(account.id, token);
   return token.accessToken;
 }

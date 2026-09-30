@@ -27,6 +27,7 @@ import io
 import json
 import os
 import re
+import smtplib
 import socket
 import ssl
 import struct
@@ -37,7 +38,7 @@ import time
 import urllib.request
 import zipfile
 
-VERSION = 4
+VERSION = 5
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -48,6 +49,16 @@ SERVERS = {
     'yahoo': ('imap.mail.yahoo.com', 993),
     'aol': ('imap.aol.com', 993),
 }
+
+# Outgoing mail, with the same app password. (host, port, implicit TLS)
+SMTP_SERVERS = {
+    'icloud': ('smtp.mail.me.com', 587, False),  # STARTTLS
+    'yahoo': ('smtp.mail.yahoo.com', 465, True),
+    'aol': ('smtp.aol.com', 465, True),
+}
+# Yahoo and AOL file what is sent through SMTP in Sent themselves; iCloud
+# does not, so the helper saves a copy there.
+SAVES_SENT_ITSELF = {'yahoo', 'aol'}
 
 
 class HelperError(Exception):
@@ -244,10 +255,11 @@ def select_folder(conn, name, readonly):
 
 
 def open_folder(conn, req, readonly):
-    """Selects the folder a request is about: the inbox, or with
-    folder "spam" the spam folder. Returns its UIDVALIDITY."""
-    if req.get('folder') == 'spam':
-        return select_folder(conn, find_junk(conn), readonly)
+    """Selects the folder a request is about: the inbox, or with folder
+    "spam", "sent" or "drafts" that folder. Returns its UIDVALIDITY."""
+    folder = req.get('folder')
+    if folder in FINDERS:
+        return select_folder(conn, FINDERS[folder](conn), readonly)
     return select_inbox(conn, readonly)
 
 
@@ -298,7 +310,7 @@ def fetch_headers(conn, uids, uidvalidity):
     if not uids:
         return messages
     typ, data = conn.uid('FETCH', ','.join(str(u) for u in uids),
-                         '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])')
+                         '(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE)])')
     check(typ, data, 'Fetching headers')
     for n, item in enumerate(data):
         if not isinstance(item, tuple):
@@ -320,6 +332,7 @@ def fetch_headers(conn, uids, uidvalidity):
         messages.append({
             'id': '{}-{}'.format(uidvalidity, uid.group(1)),
             'from': address(decode_header(hdr.get('From'))),
+            'to': addresses(hdr.get_all('To')),
             'subject': decode_header(hdr.get('Subject')),
             'date': date_ms(hdr.get('Date'), fallback) or fallback or 0,
             'read': bool(flags and '\\seen' in flags.group(1).lower()),
@@ -416,8 +429,13 @@ def cmd_get_message(req):
         'id': req['id'],
         'subject': decode_header(msg.get('Subject')),
         'from': address(str(msg.get('From', ''))),
-        'to': [address(a) for a in _addr_list(msg.get_all('To'))],
-        'cc': [address(a) for a in _addr_list(msg.get_all('Cc'))],
+        'to': addresses(msg.get_all('To')),
+        'cc': addresses(msg.get_all('Cc')),
+        'bcc': addresses(msg.get_all('Bcc')),
+        'replyTo': addresses(msg.get_all('Reply-To')),
+        'internetMessageId': (msg.get('Message-ID') or '').strip() or None,
+        'inReplyTo': (msg.get('In-Reply-To') or '').strip() or None,
+        'references': ' '.join((msg.get('References') or '').split()) or None,
         'date': date_ms(msg.get('Date')) or 0,
         'isRead': '\\Seen' in meta,
         'html': content(html_part),
@@ -428,6 +446,13 @@ def cmd_get_message(req):
 
 def _addr_list(values):
     return ['{} <{}>'.format(n, a) if n else a for n, a in email.utils.getaddresses([str(v) for v in values or []])]
+
+
+def addresses(values):
+    """Address objects from raw header values; names are decoded after
+    splitting, so a comma inside a quoted name stays in the name."""
+    return [{'name': decode_header(n), 'email': a}
+            for n, a in email.utils.getaddresses([str(v) for v in values or []]) if a]
 
 
 def cmd_get_attachment(req):
@@ -513,6 +538,21 @@ def find_trash(conn):
 
 def find_junk(conn):
     return find_special(conn, '\\junk', JUNK_NAMES, 'Spam')
+
+
+SENT_NAMES = ('Sent Messages', 'Sent', 'Sent Items', 'Sent Mail')
+DRAFTS_NAMES = ('Drafts', 'Draft')
+
+
+def find_sent(conn):
+    return find_special(conn, '\\sent', SENT_NAMES, 'Sent')
+
+
+def find_drafts(conn):
+    return find_special(conn, '\\drafts', DRAFTS_NAMES, 'Drafts')
+
+
+FINDERS = {'spam': find_junk, 'sent': find_sent, 'drafts': find_drafts}
 
 
 def quote_mailbox(name):
@@ -748,6 +788,139 @@ def watch_loop(first_request):
             apply(req.get('accounts'))
 
 
+# ---------- Sent, Drafts and sending ----------
+
+def cmd_folder_list(req):
+    """The newest emails of a folder ("sent", "drafts", "spam"); unseenOnly
+    limits it to unread ones."""
+    limit = int(req.get('limit', 10))
+    conn = connect(req['provider'], req['email'])
+    try:
+        uidvalidity = open_folder(conn, req, readonly=True)
+        uids = search(conn, 'UNSEEN' if req.get('unseenOnly') else 'ALL')
+        return {'messages': fetch_headers(conn, sorted(uids)[-limit:], uidvalidity)}
+    finally:
+        _logout(conn)
+
+
+def _append(conn, mailbox, raw, flags):
+    typ, data = conn.append(quote_mailbox(mailbox), flags, imaplib.Time2Internaldate(time.time()), raw)
+    check(typ, data, 'Saving to {}'.format(mailbox))
+
+
+def _find_by_message_id(conn, message_id):
+    typ, data = conn.uid('SEARCH', None, 'HEADER', 'Message-ID', '"{}"'.format(message_id.replace('"', '')))
+    uids = [int(u) for u in _text(data[0] or b'').split()] if typ == 'OK' else []
+    return max(uids) if uids else None
+
+
+def _expunge_uids(conn, uids):
+    typ, data = conn.uid('STORE', ','.join(uids), '+FLAGS.SILENT', '(\\Deleted)')
+    check(typ, data, 'Removing the old draft')
+    typ, data = conn.capability()
+    caps = set(_text(data[0]).upper().split()) if typ == 'OK' and data else set()
+    if 'UIDPLUS' in caps:
+        conn.uid('EXPUNGE', ','.join(uids))
+    else:
+        conn.expunge()
+
+
+def cmd_save_draft(req):
+    """Saves a draft (a full MIME message) to Drafts, replacing the previous
+    version if replaceId is given. Returns the new id."""
+    raw = base64.b64decode(req['raw'])
+    conn = connect(req['provider'], req['email'])
+    try:
+        drafts = find_drafts(conn)
+        _append(conn, drafts, raw, '(\\Draft \\Seen)')
+        uidvalidity = select_folder(conn, drafts, readonly=False)
+        uid = _find_by_message_id(conn, req['messageId'])
+        old = [u for u in parse_ids([req['replaceId']], uidvalidity)] if req.get('replaceId') else []
+        old = [u for u in old if str(u) != str(uid)]
+        if old:
+            _expunge_uids(conn, old)
+        if uid is None:
+            raise HelperError('imap', 'The draft was saved but could not be found again')
+        return {'id': '{}-{}'.format(uidvalidity, uid)}
+    except HelperError as e:
+        if e.code == 'stale':  # Drafts was rebuilt; the old copy is gone anyway
+            return {'id': None}
+        raise
+    finally:
+        _logout(conn)
+
+
+def cmd_delete_draft(req):
+    conn = connect(req['provider'], req['email'])
+    try:
+        uidvalidity = select_folder(conn, find_drafts(conn), readonly=False)
+        _expunge_uids(conn, parse_ids([req['id']], uidvalidity))
+        return {}
+    finally:
+        _logout(conn)
+
+
+def smtp_server(provider):
+    # Development override: UNREAD_MAIL_SMTP_OVERRIDE=host:port[:plain]
+    override = os.environ.get('UNREAD_MAIL_SMTP_OVERRIDE')
+    if override:
+        parts = override.split(':')
+        return parts[0], int(parts[1]), None
+    if provider not in SMTP_SERVERS:
+        raise HelperError('bad_request', 'Unknown provider: ' + str(provider))
+    return SMTP_SERVERS[provider]
+
+
+def cmd_send(req):
+    """Sends a MIME message over SMTP with the saved app password, then
+    removes its draft and (for iCloud) files a copy in Sent."""
+    raw = base64.b64decode(req['raw'])  # without a Bcc header
+    rcpts = [r for r in req.get('rcpts', []) if r]
+    if not rcpts:
+        raise HelperError('bad_request', 'No recipients')
+    provider, email_addr = req['provider'], req['email']
+    password = get_password(key(provider, email_addr))
+    host, port, implicit_tls = smtp_server(provider)
+    try:
+        if implicit_tls is None:  # test server, no TLS
+            smtp = smtplib.SMTP(host, port, timeout=60)
+        elif implicit_tls:
+            smtp = smtplib.SMTP_SSL(host, port, context=tls_context(), timeout=60)
+        else:
+            smtp = smtplib.SMTP(host, port, timeout=60)
+            smtp.starttls(context=tls_context())
+        with smtp:
+            if implicit_tls is not None:
+                smtp.login(email_addr, password)
+            refused = smtp.sendmail(email_addr, rcpts, raw)
+    except smtplib.SMTPAuthenticationError:
+        raise HelperError('auth', 'The mail server rejected the app password for sending')
+    except smtplib.SMTPRecipientsRefused as e:
+        raise HelperError('rejected', 'No recipient was accepted: ' + ', '.join(e.recipients))
+    except (smtplib.SMTPException, OSError) as e:
+        raise HelperError('network', 'Sending failed: {}'.format(e))
+
+    # Housekeeping; the email is already sent, so problems here are reported
+    # but do not fail the send.
+    warning = None
+    try:
+        conn = connect(provider, email_addr, password)
+        try:
+            if req.get('draftId'):
+                try:
+                    uidvalidity = select_folder(conn, find_drafts(conn), readonly=False)
+                    _expunge_uids(conn, parse_ids([req['draftId']], uidvalidity))
+                except HelperError:
+                    pass
+            if provider not in SAVES_SENT_ITSELF or req.get('saveSent'):
+                _append(conn, find_sent(conn), raw, '(\\Seen)')
+        finally:
+            _logout(conn)
+    except (HelperError, imaplib.IMAP4.error, OSError) as e:
+        warning = 'Sent, but tidying up Drafts/Sent failed: {}'.format(e)
+    return {'refused': sorted(refused.keys()) if refused else [], 'warning': warning}
+
+
 # ---------- one-click update of the extension ----------
 #
 # An unpacked extension cannot change its own files, so the "Install update"
@@ -855,6 +1028,10 @@ COMMANDS = {
     'markAllRead': cmd_mark_all_read,
     'trash': cmd_trash,
     'spamList': cmd_spam_list,
+    'folderList': cmd_folder_list,
+    'saveDraft': cmd_save_draft,
+    'deleteDraft': cmd_delete_draft,
+    'send': cmd_send,
     'notSpam': cmd_not_spam,
     'selfUpdate': cmd_self_update,
 }

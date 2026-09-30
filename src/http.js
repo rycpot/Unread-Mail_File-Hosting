@@ -10,7 +10,8 @@ export class ApiError extends Error {
 
 // Authorised fetch for an account. On 401 it renews the token once and retries;
 // a second 401 means the account needs an interactive sign-in.
-export async function apiFetch(account, url, { method = 'GET', body, headers = {}, raw = false } = {}) {
+// rawBody (string/Blob) is sent as is, with its Content-Type in headers.
+export async function apiFetch(account, url, { method = 'GET', body, rawBody, headers = {}, raw = false } = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getAccessToken(account, { forceRenew: attempt > 0 });
     const res = await fetch(url, {
@@ -20,7 +21,7 @@ export async function apiFetch(account, url, { method = 'GET', body, headers = {
         ...(body !== undefined && { 'Content-Type': 'application/json' }),
         ...headers,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: rawBody ?? (body !== undefined ? JSON.stringify(body) : undefined),
     });
     if (res.status === 401) {
       if (attempt === 0) continue;

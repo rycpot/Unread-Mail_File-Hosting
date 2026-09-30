@@ -3,6 +3,8 @@
 
 import { MAX_MESSAGES_PER_ACCOUNT } from '../config.js';
 import { apiFetch } from '../http.js';
+import { hasOutlookSendPermission, SendPermissionError } from '../auth.js';
+import { bytesToBase64 } from '../compose/mime.js';
 import { base64ToBytes } from '../util.js';
 
 const API = 'https://graph.microsoft.com/v1.0/me';
@@ -57,7 +59,7 @@ export const outlook = {
   async getMessage(account, id) {
     const m = await apiFetch(
       account,
-      `${API}/messages/${enc(id)}?$select=subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments,isRead,webLink`,
+      `${API}/messages/${enc(id)}?$select=subject,from,toRecipients,ccRecipients,bccRecipients,replyTo,receivedDateTime,body,hasAttachments,isRead,webLink,internetMessageId,conversationId`,
       { headers: { Prefer: 'outlook.body-content-type="html"' } },
     );
     const html = m.body?.contentType === 'html' ? m.body.content : null;
@@ -86,6 +88,9 @@ export const outlook = {
       from: toAddress(m.from),
       to: (m.toRecipients ?? []).map(toAddress),
       cc: (m.ccRecipients ?? []).map(toAddress),
+      bcc: (m.bccRecipients ?? []).map(toAddress),
+      replyTo: (m.replyTo ?? []).map(toAddress),
+      internetMessageId: m.internetMessageId ?? null,
       date: Date.parse(m.receivedDateTime),
       isRead: m.isRead,
       html,
@@ -137,6 +142,105 @@ export const outlook = {
     });
   },
 
+  // ---------- Sent, Drafts, sending ----------
+
+  async fetchSent(account, limit) {
+    const list = await apiFetch(account, `${API}/mailFolders/sentitems/messages?$orderby=sentDateTime%20desc&$top=${limit}` +
+      '&$select=id,subject,from,toRecipients,sentDateTime,bodyPreview');
+    return (list.value ?? []).map((m) => ({ ...toSummary({ ...m, receivedDateTime: m.sentDateTime }), to: (m.toRecipients ?? []).map(toAddress), read: true }));
+  },
+
+  async fetchDrafts(account, limit) {
+    const list = await apiFetch(account, `${API}/mailFolders/drafts/messages?$orderby=lastModifiedDateTime%20desc&$top=${limit}` +
+      '&$select=id,subject,from,toRecipients,lastModifiedDateTime,bodyPreview');
+    return (list.value ?? []).map((m) => ({ ...toSummary({ ...m, receivedDateTime: m.lastModifiedDateTime }), to: (m.toRecipients ?? []).map(toAddress), read: true }));
+  },
+
+  async loadDraft(account, ref) {
+    const msg = await this.getMessage(account, ref);
+    const list = await apiFetch(account, `${API}/messages/${enc(ref)}/attachments`);
+    msg.attachments = (list.value ?? [])
+      .filter((a) => a['@odata.type'] === '#microsoft.graph.fileAttachment')
+      .map((a) => ({
+        serverId: a.id,
+        filename: a.name || 'attachment',
+        mimeType: (a.contentType ?? '').toLowerCase(),
+        size: a.size ?? 0,
+        contentId: a.contentId?.replace(/^<|>$/g, '') ?? null,
+        inline: Boolean(a.isInline),
+        bytes: base64ToBytes(a.contentBytes ?? ''),
+      }));
+    return { ...msg, ref };
+  },
+
+  // Replies and forwards start from Graph's createReply / createReplyAll /
+  // createForward, which set the threading headers (and, for a forward, copy
+  // the original attachments); our recipients, subject and body then replace
+  // theirs. Attachments are kept in step with the draft's: each one we
+  // upload is remembered by its serverId, and server copies we no longer
+  // have are removed. Returns the draft id.
+  async saveDraft(account, draft) {
+    let ref = draft.ref;
+    if (!ref) {
+      const action = { reply: 'createReply', replyAll: 'createReplyAll', forward: 'createForward' }[draft.mode];
+      const created = action && draft.reply?.id
+        ? await apiFetch(account, `${API}/messages/${enc(draft.reply.id)}/${action}`, { method: 'POST', body: {} })
+        : await apiFetch(account, `${API}/messages`, { method: 'POST', body: { subject: draft.subject ?? '' } });
+      ref = created.id;
+    }
+    const recipients = (list) => (list ?? []).map((a) => ({ emailAddress: { address: a.email, name: a.name || a.email } }));
+    await apiFetch(account, `${API}/messages/${enc(ref)}`, {
+      method: 'PATCH',
+      body: {
+        subject: draft.subject ?? '',
+        body: { contentType: 'HTML', content: draft.html ?? '' },
+        toRecipients: recipients(draft.to),
+        ccRecipients: recipients(draft.cc),
+        bccRecipients: recipients(draft.bcc),
+      },
+    });
+
+    // Attachments: claim server copies (e.g. a forward's originals) by name
+    // and size, upload the rest, remove leftovers.
+    const server = ((await apiFetch(account, `${API}/messages/${enc(ref)}/attachments?$select=id,name,size,isInline,contentId`)).value ?? []);
+    const wanted = [
+      ...(draft.attachments ?? []).map((a) => ({ item: a, inline: false })),
+      ...(draft.inline ?? []).map((a) => ({ item: a, inline: true })),
+    ];
+    const claimed = new Set();
+    for (const { item } of wanted) {
+      if (item.serverId && server.some((x) => x.id === item.serverId)) {
+        claimed.add(item.serverId);
+        continue;
+      }
+      const match = server.find((x) => !claimed.has(x.id) && x.name === item.filename && Math.abs((x.size ?? 0) - (item.bytes?.length ?? 0)) < 2048);
+      if (match) {
+        item.serverId = match.id;
+        claimed.add(match.id);
+      } else item.serverId = null;
+    }
+    for (const x of server) {
+      if (!claimed.has(x.id)) await apiFetch(account, `${API}/messages/${enc(ref)}/attachments/${enc(x.id)}`, { method: 'DELETE' });
+    }
+    for (const { item, inline } of wanted) {
+      if (!item.serverId) item.serverId = await uploadAttachment(account, ref, item, inline);
+    }
+    return ref;
+  },
+
+  async deleteDraft(account, ref) {
+    await apiFetch(account, `${API}/messages/${enc(ref)}`, { method: 'DELETE' });
+  },
+
+  async prepareSend(account, draft) {
+    if (!(await hasOutlookSendPermission(account))) throw new SendPermissionError(account);
+    return { id: draft.ref };
+  },
+
+  async commitSend(account, sendable) {
+    await apiFetch(account, `${API}/messages/${enc(sendable.id)}/send`, { method: 'POST' });
+  },
+
   async trashMany(account, ids, onProgress) {
     return batch(account, ids, (id) => ({ method: 'POST', url: `/me/messages/${enc(id)}/move`, body: { destinationId: 'deleteditems' } }), onProgress);
   },
@@ -177,6 +281,39 @@ async function batch(account, ids, request, onProgress) {
     onProgress?.(Math.min(i + 20, ids.length), ids.length);
   }
   return failed;
+}
+
+// Up to 3 MB in one request; larger files through an upload session in 4 MB
+// chunks (up to 150 MB). Returns the attachment id when Graph gives one.
+async function uploadAttachment(account, ref, item, inline) {
+  const bytes = item.bytes;
+  const base = { name: item.filename, contentType: item.mimeType || 'application/octet-stream', isInline: inline, ...(inline && { contentId: item.cid ?? item.contentId }) };
+  if (bytes.length <= 3 * 1024 * 1024) {
+    const res = await apiFetch(account, `${API}/messages/${enc(ref)}/attachments`, {
+      method: 'POST',
+      body: { '@odata.type': '#microsoft.graph.fileAttachment', ...base, contentBytes: bytesToBase64(bytes) },
+    });
+    return res.id;
+  }
+  const session = await apiFetch(account, `${API}/messages/${enc(ref)}/attachments/createUploadSession`, {
+    method: 'POST',
+    body: { AttachmentItem: { attachmentType: 'file', name: base.name, size: bytes.length, contentType: base.contentType, isInline: inline, ...(inline && { contentId: base.contentId }) } },
+  });
+  const CHUNK = 4 * 1024 * 1024;
+  let last = null;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+    // The upload URL carries its own authorisation; no bearer token.
+    const res = await fetch(session.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Range': `bytes ${i}-${i + chunk.length - 1}/${bytes.length}` },
+      body: chunk,
+    });
+    if (!res.ok) throw new Error(`Attachment upload failed (${res.status})`);
+    last = res;
+  }
+  const location = last?.headers.get('Location') ?? '';
+  return location.match(/Attachments\('([^']+)'\)/i)?.[1] ?? null;
 }
 
 const toSummary = (m) => ({

@@ -16,12 +16,15 @@
 import { AuthRequiredError } from '../auth.js';
 import { ApiError } from '../http.js';
 import { ProtonSessionMissing, decryptAttachment, decryptMessage, getAddressKeys } from './proton-crypto.js';
+import { attachmentSessionKey, buildPackages, encryptAttachment, encryptDraftBody } from './proton-send.js';
 
 const ORIGIN = 'https://mail.proton.me';
 const API = `${ORIGIN}/api`;
 const INBOX = '0';
 const TRASH = '3';
 const SPAM = '4';
+const SENT = '7';
+const DRAFTS = '8';
 const RULE_ID = 1001;
 const VERSION_KEY = 'protonAppVersion';
 // Used only if version.json cannot be read and nothing is cached yet.
@@ -83,7 +86,8 @@ async function sessionUids() {
   return [...new Set(cookies.filter((c) => c.name.startsWith('AUTH-')).map((c) => c.name.slice(5)))];
 }
 
-async function rawCall(uid, path, { method = 'GET', body, retry = true, binary = false } = {}) {
+// form: a FormData body (attachment uploads).
+async function rawCall(uid, path, { method = 'GET', body, form, retry = true, binary = false } = {}) {
   await ensureProtonHeaderRule();
   const res = await fetch(`${API}/${path}`, {
     method,
@@ -94,14 +98,14 @@ async function rawCall(uid, path, { method = 'GET', body, retry = true, binary =
       Accept: 'application/vnd.protonmail.v1+json',
       ...(body !== undefined && { 'Content-Type': 'application/json' }),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
   });
   if (binary && res.ok) return res.arrayBuffer();
   const json = await res.json().catch(() => ({}));
   // 5003/5005: this app version is no longer accepted; fetch the current one.
   if ((json.Code === 5003 || json.Code === 5005) && retry) {
     await appVersion({ refresh: true });
-    return rawCall(uid, path, { method, body, retry: false, binary });
+    return rawCall(uid, path, { method, body, form, retry: false, binary });
   }
   if (res.status === 401) throw new AuthRequiredError('Proton session expired');
   if (!res.ok || (json.Code && json.Code !== 1000 && json.Code !== 1001)) {
@@ -205,6 +209,7 @@ function toSummary(m) {
     subject: m.Subject ?? '',
     date: (m.Time ?? 0) * 1000,
     read: !m.Unread,
+    to: (m.ToList ?? []).map(addr),
   };
 }
 
@@ -219,6 +224,15 @@ async function listLabel(account, label, params) {
 
 const moveTo = (account, label, ids) =>
   call(account, 'mail/v4/messages/label', { method: 'PUT', body: { LabelID: label, IDs: ids } });
+
+// The unlocked address (id, email, primary key) to send from.
+async function senderAddress(account, email) {
+  const keys = await getAddressKeys(account, (path, opts) => call(account, path, opts));
+  const want = (email ?? account.email).toLowerCase();
+  const address = keys.addresses.find((a) => a.Email.toLowerCase() === want) ?? keys.addresses[0];
+  if (!address) throw new Error('No Proton address key is available for sending');
+  return address;
+}
 
 // ---------- provider ----------
 
@@ -282,7 +296,10 @@ export const proton = {
       date: (m.Time ?? 0) * 1000,
       isRead: !m.Unread,
       numAttachments: m.NumAttachments ?? 0,
-      webUrl: `${ORIGIN}/u/${localID}/${folder === 'spam' ? 'spam' : 'inbox'}/${encodeURIComponent(m.ID)}`,
+      webUrl: `${ORIGIN}/u/${localID}/${['spam', 'sent', 'drafts'].includes(folder) ? folder : 'inbox'}/${encodeURIComponent(m.ID)}`,
+      bcc: (m.BCCList ?? []).map(addr),
+      replyTo: (m.ReplyTos ?? []).map(addr),
+      parentId: m.ParentID ?? null,
     };
     const decrypt = async () => {
       await matchSessionEntry(account);
@@ -346,6 +363,112 @@ export const proton = {
   // Moves to Trash (label 3), as the web app's Delete button does.
   async trash(account, id) {
     await moveTo(account, TRASH, [id]);
+  },
+
+  // ---------- Sent, Drafts, sending ----------
+
+  async fetchSent(account, limit) {
+    return ((await listLabel(account, SENT, { PageSize: String(limit) })).Messages ?? []).map(toSummary);
+  },
+
+  async fetchDrafts(account, limit) {
+    return ((await listLabel(account, DRAFTS, { PageSize: String(limit) })).Messages ?? []).map((m) => ({ ...toSummary(m), read: true }));
+  },
+
+  async loadDraft(account, ref) {
+    const msg = await this.getMessage(account, ref, { folder: 'drafts' });
+    if (msg.encrypted) throw new Error(msg.readError ?? 'This draft could not be decrypted');
+    msg.attachments = await Promise.all(msg.attachments.map(async (a) => ({
+      ...a,
+      serverId: a.id,
+      bytes: a.data ? Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0)) : await this.getAttachment(account, ref, a),
+    })));
+    return { ...msg, ref };
+  },
+
+  // The body is stored encrypted to the sender's address key; attachments are
+  // uploaded encrypted once and remembered by serverId (and session key, for
+  // sending). Server attachments no longer in the draft are deleted.
+  async saveDraft(account, draft) {
+    const api = (path, opts) => call(account, path, opts);
+    const address = await senderAddress(account, draft.from.email);
+    const list = (xs) => (xs ?? []).map((a) => ({ Name: a.name || a.email, Address: a.email }));
+    const Message = {
+      ToList: list(draft.to),
+      CCList: list(draft.cc),
+      BCCList: list(draft.bcc),
+      Subject: draft.subject ?? '',
+      Unread: 0,
+      Sender: { Name: address.DisplayName || draft.from.name || '', Address: address.Email },
+      AddressID: address.ID,
+      Body: await encryptDraftBody(draft.html ?? '', address),
+      MIMEType: 'text/html',
+    };
+    let res;
+    if (!draft.ref) {
+      const action = { reply: 0, replyAll: 1, forward: 2 }[draft.mode];
+      res = await api('mail/v4/messages', {
+        method: 'POST',
+        body: { Message, ...(draft.reply?.id && action !== undefined && { ParentID: draft.reply.id, Action: action }) },
+      });
+    } else {
+      res = await api(`mail/v4/messages/${encodeURIComponent(draft.ref)}`, { method: 'PUT', body: { Message } });
+    }
+    const ref = res.Message.ID;
+    const items = [
+      ...(draft.attachments ?? []).map((item) => ({ item, inline: false })),
+      ...(draft.inline ?? []).map((item) => ({ item, inline: true })),
+    ];
+    const keep = new Set(items.map(({ item }) => item.serverId).filter(Boolean));
+    for (const a of res.Message.Attachments ?? []) {
+      if (!keep.has(a.ID)) await api(`mail/v4/attachments/${encodeURIComponent(a.ID)}`, { method: 'DELETE' }).catch(() => {});
+    }
+    for (const { item, inline } of items) {
+      if (item.serverId) continue;
+      const enc = await encryptAttachment(item.bytes, item.filename, address);
+      const form = new FormData();
+      form.append('Filename', item.filename);
+      form.append('MessageID', ref);
+      form.append('MIMEType', item.mimeType || 'application/octet-stream');
+      if (inline) {
+        form.append('ContentID', item.cid ?? item.contentId);
+        form.append('Disposition', 'inline');
+      }
+      form.append('KeyPackets', new Blob([enc.keyPackets]));
+      form.append('DataPacket', new Blob([enc.dataPacket]));
+      form.append('Signature', new Blob([enc.signature]));
+      const up = await api('mail/v4/attachments', { method: 'POST', form });
+      item.serverId = up.Attachment.ID;
+      item.sessionKey = enc.sessionKey;
+    }
+    return ref;
+  },
+
+  async deleteDraft(account, ref) {
+    await call(account, 'mail/v4/messages/delete', { method: 'PUT', body: { IDs: [ref] } });
+  },
+
+  // Everything encrypted now, in the app; commitSend only posts it.
+  async prepareSend(account, draft) {
+    const api = (path, opts) => call(account, path, opts);
+    const keys = await getAddressKeys(account, api);
+    const address = await senderAddress(account, draft.from.email);
+    const attachments = [];
+    for (const item of [...(draft.attachments ?? []), ...(draft.inline ?? [])]) {
+      if (!item.serverId) continue;
+      item.sessionKey ??= await attachmentSessionKey(item.keyPackets, keys);
+      attachments.push({ id: item.serverId, sessionKey: item.sessionKey });
+    }
+    const recipients = [...(draft.to ?? []), ...(draft.cc ?? []), ...(draft.bcc ?? [])].map((a) => a.email);
+    const packages = await buildPackages({ html: draft.html ?? '', address, recipients, attachments, api });
+    return { id: draft.ref, packages };
+  },
+
+  async commitSend(account, sendable) {
+    await call(account, `mail/v4/messages/${encodeURIComponent(sendable.id)}`, {
+      method: 'POST',
+      body: { Packages: sendable.packages, AutoSaveContacts: 0 },
+    });
   },
 
   async trashMany(account, ids, onProgress) {

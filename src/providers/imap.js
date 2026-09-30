@@ -5,6 +5,7 @@
 import { MAX_MESSAGES_PER_ACCOUNT } from '../config.js';
 import { callHelper } from '../native.js';
 import { base64ToBytes } from '../util.js';
+import { buildMime, bytesToBase64, newMessageId } from '../compose/mime.js';
 
 function imapProvider({ id, name, webUrl, passwordHelp }) {
   const call = (account, cmd, extra = {}, opts) =>
@@ -73,6 +74,50 @@ function imapProvider({ id, name, webUrl, passwordHelp }) {
 
     async notSpam(account, ids) {
       return (await call(account, 'notSpam', { ids })).failed ?? [];
+    },
+
+    // ---------- Sent, Drafts, sending ----------
+
+    async fetchSent(account, limit) {
+      return (await call(account, 'folderList', { folder: 'sent', limit })).messages;
+    },
+
+    async fetchDrafts(account, limit) {
+      return (await call(account, 'folderList', { folder: 'drafts', limit })).messages.map((m) => ({ ...m, read: true }));
+    },
+
+    async loadDraft(account, ref) {
+      const msg = await this.getMessage(account, ref, { folder: 'drafts' });
+      msg.attachments = await Promise.all(msg.attachments.map(async (a) => ({
+        ...a, bytes: await this.getAttachment(account, ref, a, { folder: 'drafts' }),
+      })));
+      return { ...msg, ref, messageId: msg.internetMessageId };
+    },
+
+    // The whole message is stored again on each save (IMAP drafts cannot be
+    // edited in place); the helper removes the previous copy. Returns its id.
+    async saveDraft(account, draft) {
+      draft.messageId ??= newMessageId(draft.from.email);
+      const raw = bytesToBase64(new TextEncoder().encode(buildMime(draft, { includeBcc: true })));
+      const res = await call(account, 'saveDraft', { raw, messageId: draft.messageId, replaceId: draft.ref ?? undefined });
+      return res.id;
+    },
+
+    async deleteDraft(account, ref) {
+      await call(account, 'deleteDraft', { id: ref });
+    },
+
+    // The message as delivered: no Bcc header; every recipient on the envelope.
+    async prepareSend(account, draft) {
+      const raw = bytesToBase64(new TextEncoder().encode(buildMime(draft, { includeBcc: false })));
+      const rcpts = [...(draft.to ?? []), ...(draft.cc ?? []), ...(draft.bcc ?? [])].map((a) => a.email);
+      return { raw, rcpts, draftId: draft.ref };
+    },
+
+    async commitSend(account, sendable) {
+      const res = await call(account, 'send', sendable);
+      if (res.warning) console.warn('[send]', res.warning);
+      return res;
     },
   };
 }

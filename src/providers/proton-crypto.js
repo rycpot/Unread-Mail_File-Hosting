@@ -120,14 +120,27 @@ async function loadAddressKeys(account, api) {
   const userPublic = userPrivate.map((k) => k.toPublic());
 
   const addressKeys = [];
+  // Per address, for sending: its id, email, name and primary key.
+  addressKeys.addresses = [];
   for (const address of Addresses ?? []) {
+    const unlocked = [];
     for (const k of (address.Keys ?? []).filter(isActive)) {
       try {
         const passphrase = await addressKeyPassword(k, userPrivate, userPublic, keyPassword);
-        addressKeys.push(await unlock(k.PrivateKey, passphrase));
+        const key = await unlock(k.PrivateKey, passphrase);
+        addressKeys.push(key);
+        unlocked.push({ key, primary: k.Primary === 1 });
       } catch {
         skipped++;
       }
+    }
+    if (unlocked.length) {
+      addressKeys.addresses.push({
+        ID: address.ID,
+        Email: address.Email,
+        DisplayName: address.DisplayName ?? '',
+        primary: (unlocked.find((x) => x.primary) ?? unlocked[0]).key,
+      });
     }
   }
   if (!addressKeys.length) throw new Error('Could not unlock any Proton address key');

@@ -2,10 +2,12 @@
 // https://developers.google.com/gmail/api/reference/rest
 
 import { MAX_MESSAGES_PER_ACCOUNT } from '../config.js';
+import { buildMime } from '../compose/mime.js';
 import { apiFetch } from '../http.js';
 import { base64ToBytes, decodeEntities, decodeText, mapLimit, parseAddress, parseAddressList } from '../util.js';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const UPLOAD = 'https://gmail.googleapis.com/upload/gmail/v1/users/me';
 
 export const gmail = {
   id: 'gmail',
@@ -57,23 +59,62 @@ export const gmail = {
   },
 
   async getMessage(account, id) {
-    const m = await apiFetch(account, `${API}/messages/${id}?format=full`);
-    const h = headerMap(m.payload?.headers);
-    const parts = { html: null, text: null, attachments: [] };
-    walkParts(m.payload, parts);
-    return {
-      id: m.id,
-      subject: h.subject ?? '',
-      from: parseAddress(h.from),
-      to: parseAddressList(h.to),
-      cc: parseAddressList(h.cc),
-      date: Number(m.internalDate),
-      isRead: !(m.labelIds ?? []).includes('UNREAD'),
-      html: parts.html,
-      text: parts.text,
-      attachments: parts.attachments,
-      webUrl: `https://mail.google.com/mail/?authuser=${encodeURIComponent(account.email)}#all/${m.threadId}`,
-    };
+    return toFullMessage(account, await apiFetch(account, `${API}/messages/${id}?format=full`));
+  },
+
+  // ---------- Sent, Drafts, sending ----------
+
+  async fetchSent(account, limit) {
+    const list = await apiFetch(account, `${API}/messages?labelIds=SENT&maxResults=${limit}`);
+    return headers(account, list.messages ?? []);
+  },
+
+  // Draft rows: id is the draft id (what the composer reopens).
+  async fetchDrafts(account, limit) {
+    const list = await apiFetch(account, `${API}/drafts?maxResults=${limit}`);
+    const drafts = list.drafts ?? [];
+    const rows = await headers(account, drafts.map((d) => d.message));
+    const byMessage = new Map(drafts.map((d) => [d.message.id, d.id]));
+    return rows.map((r) => ({ ...r, messageId: r.id, id: byMessage.get(r.id), read: true }));
+  },
+
+  // A saved draft with its attachments' bytes, for the composer.
+  async loadDraft(account, ref) {
+    const d = await apiFetch(account, `${API}/drafts/${ref}?format=full`);
+    const msg = toFullMessage(account, d.message);
+    msg.attachments = await Promise.all(msg.attachments.map(async (a) => ({ ...a, bytes: await this.getAttachment(account, msg.id, a) })));
+    return { ...msg, ref };
+  },
+
+  // Creates or updates the draft (media upload, so attachments up to 35 MB
+  // fit); the thread id keeps replies in their conversation.
+  async saveDraft(account, draft) {
+    const mime = buildMime(draft, { includeBcc: true });
+    const meta = { message: draft.reply?.threadId ? { threadId: draft.reply.threadId } : {} };
+    const b = `um_${crypto.randomUUID()}`;
+    const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
+      `--${b}\r\nContent-Type: message/rfc822\r\n\r\n${mime}\r\n--${b}--`;
+    const url = draft.ref ? `${UPLOAD}/drafts/${draft.ref}?uploadType=multipart` : `${UPLOAD}/drafts?uploadType=multipart`;
+    const res = await apiFetch(account, url, {
+      method: draft.ref ? 'PUT' : 'POST',
+      rawBody: body,
+      headers: { 'Content-Type': `multipart/related; boundary=${b}` },
+    });
+    return res.id;
+  },
+
+  async deleteDraft(account, ref) {
+    await apiFetch(account, `${API}/drafts/${ref}`, { method: 'DELETE' });
+  },
+
+  // Called in the app once the final version is saved; commitSend runs in the
+  // background after the undo delay.
+  async prepareSend(account, draft) {
+    return { draftId: draft.ref };
+  },
+
+  async commitSend(account, sendable) {
+    await apiFetch(account, `${API}/drafts/send`, { method: 'POST', body: { id: sendable.draftId } });
   },
 
   // Returns the attachment bytes. Small inline parts carry their data directly.
@@ -141,6 +182,31 @@ export const gmail = {
   },
 };
 
+function toFullMessage(account, m) {
+  const h = headerMap(m.payload?.headers);
+  const parts = { html: null, text: null, attachments: [] };
+  walkParts(m.payload, parts);
+  return {
+    id: m.id,
+    threadId: m.threadId,
+    subject: h.subject ?? '',
+    from: parseAddress(h.from),
+    to: parseAddressList(h.to),
+    cc: parseAddressList(h.cc),
+    bcc: parseAddressList(h.bcc),
+    replyTo: parseAddressList(h['reply-to']),
+    internetMessageId: h['message-id'] ?? null,
+    references: h.references ?? null,
+    inReplyTo: h['in-reply-to'] ?? null,
+    date: Number(m.internalDate),
+    isRead: !(m.labelIds ?? []).includes('UNREAD'),
+    html: parts.html,
+    text: parts.text,
+    attachments: parts.attachments,
+    webUrl: `https://mail.google.com/mail/?authuser=${encodeURIComponent(account.email)}#all/${m.threadId}`,
+  };
+}
+
 function headerMap(headers = []) {
   const map = {};
   for (const { name, value } of headers) map[name.toLowerCase()] ??= value;
@@ -183,7 +249,7 @@ function walkParts(part, out) {
 // From/Subject/snippet/date for a list of message refs, newest first.
 async function headers(account, refs) {
   const metas = await mapLimit(refs, 8, (m) =>
-    apiFetch(account, `${API}/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`),
+    apiFetch(account, `${API}/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`),
   );
   const messages = metas.map((m) => {
     const h = headerMap(m.payload?.headers);
@@ -191,6 +257,7 @@ async function headers(account, refs) {
       id: m.id,
       threadId: m.threadId,
       from: parseAddress(h.from),
+      to: parseAddressList(h.to),
       subject: h.subject ?? '',
       snippet: decodeEntities(m.snippet),
       date: Number(m.internalDate),
