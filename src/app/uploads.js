@@ -13,6 +13,7 @@
 // Free plan, 512 MB on Pro (the server says which).
 
 import { fmtDateTime } from './format.js';
+import { openViewer } from './viewer.js';
 
 const MB = 1024 * 1024;
 const HISTORY_KEY = 'uploadHistory';
@@ -239,6 +240,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   const fresh = new Set(); // links uploaded in this tab (highlighted)
   const remote = { x02: null }; // the account's list as last fetched: { entries } | { error }
   let expiry = '';
+  let shown = []; // the Recent uploads list on screen
 
   const rowActions = (e, canDelete) => `
     <button type="button" class="up-link" data-u="copy" data-url="${esc(e.url)}" title="Click to copy">${esc(e.url)}</button>
@@ -258,8 +260,10 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
   function entryRowHtml(e, s) {
     const meta = [e.size ? formatSize(e.size) : '', e.at ? fmtDateTime(e.at) : '', e.expiry ? (expired(e) ? 'expired' : `deletes after ${e.expiry}`) : ''].filter(Boolean).join(' · ');
-    return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, e.url)}
-      <span class="up-file"><span class="up-name" title="${esc(e.name)}">${esc(e.name)}</span><span class="up-meta">${esc(meta)}</span></span>
+    // The preview and the name open the file in the app's viewer.
+    const view = `data-u="view" data-url="${esc(e.url)}" role="button" tabindex="0"`;
+    return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, e.url).replace('<span class="up-thumb"', `<span class="up-thumb viewable" ${view} title="Open ${esc(e.name)}"`)}
+      <span class="up-file"><span class="up-name viewable" ${view} title="Open ${esc(e.name)}">${esc(e.name)}</span><span class="up-meta">${esc(meta)}</span></span>
       <span class="up-result">${rowActions(e, UPLOADERS[service].canDelete(s, e))}</span></li>`;
   }
 
@@ -299,6 +303,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const s = getSettings();
     const { list, loading, error } = await entries(svc);
     if (seq !== renderSeq || svc !== service) return;
+    shown = list;
     const note = loading ? '<p class="up-empty">Loading your x02 uploads…</p>'
       : error ? `<p class="up-empty error">Couldn't load your x02 uploads (${esc(error)}). Showing the ones made here.</p>` : '';
     const listHtml = list.length ? `<ul class="up-list">${list.map((e) => entryRowHtml(e, s)).join('')}</ul>`
@@ -515,6 +520,32 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     render();
   }
 
+  // Opens an upload in the app's viewer; the arrows move through the list.
+  function view(url) {
+    const index = shown.findIndex((e) => e.url === url);
+    if (index === -1) return;
+    openViewer(
+      shown.map((e) => ({
+        filename: e.name,
+        mimeType: '',
+        size: e.size || 0,
+        async load() {
+          const res = await fetch(e.url, { credentials: 'omit' });
+          if (!res.ok) throw new Error(`${UPLOADERS[service]?.name ?? 'The service'} returned HTTP ${res.status}`);
+          return new Uint8Array(await res.arrayBuffer());
+        },
+      })),
+      {
+        index,
+        onDownload: (file, bytes) => {
+          const href = URL.createObjectURL(new Blob([bytes]));
+          Object.assign(document.createElement('a'), { href, download: file.filename }).click();
+          setTimeout(() => URL.revokeObjectURL(href), 60000);
+        },
+      },
+    );
+  }
+
   const uploading = () => Object.values(active).flat().some((r) => !r.error);
 
   panel.addEventListener('click', async (e) => {
@@ -526,6 +557,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       e.stopPropagation(); // the page closes menus on outside clicks
       openSettings();
     } else if (act === 'copy') copy(el.dataset.url, 'Link');
+    else if (act === 'view') view(el.dataset.url);
     else if (act === 'delete') removeEntry(el.dataset.url);
     else if (act === 'refresh') {
       remote.x02 = null;
@@ -553,7 +585,10 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     if (e.target.matches?.('.up-thumb img')) e.target.remove();
   }, true);
   panel.addEventListener('keydown', (e) => {
-    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.up-drop')) {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.viewable')) {
+      e.preventDefault();
+      view(e.target.dataset.url);
+    } else if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.up-drop')) {
       e.preventDefault();
       e.target.click();
     }

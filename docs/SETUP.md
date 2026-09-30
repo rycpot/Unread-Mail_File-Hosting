@@ -301,7 +301,9 @@ offers **Download it here**: the app then downloads the file itself and uploads 
 The first time, Chrome asks to let the extension read data on all websites; it is
 only used for these downloads. After that it happens automatically. Each file gets its
 own link; when the uploads finish the links are copied to the clipboard (one per
-line). Click any link (or the copy icon) to copy it again, or the arrow to open it.
+line). Click any link (or the copy icon) to copy it again. Click a preview or name to
+open the file in the app's viewer (← / → move through the list, Esc closes it); the
+arrow icon opens it in a new tab instead.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile
 with the file type), size, and date and time. For x02 the list comes from your
 account, so it also shows files uploaded on the x02 website; for Catbox it lists
