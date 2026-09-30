@@ -17,6 +17,9 @@ import { fmtDate, fmtDateTime, fmtTime } from './format.js';
 import * as cacheDb from '../cache-db.js';
 import { fetchAttachment, fetchFullMessage } from '../message-fetch.js';
 import { dropFromSectionList, getSectionLists, isSectionListKey, putSectionList } from '../section-lists.js';
+import { UPLOADERS, createUploadPanel } from './uploads.js';
+
+let uploads = null; // the upload panel (created below, once the page is set up)
 
 // ---------- icons ----------
 
@@ -119,6 +122,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (Object.keys(changes).some((k) => k === 'accounts' || k === 'settings' || k.startsWith('mail/'))) {
     await load();
     renderSidebar();
+    if (changes.settings) uploads?.refresh();
     renderTopbar();
     askBannerStyle();
   }
@@ -156,6 +160,8 @@ function renderTopbar() {
   $('undoSendSeconds').value = String(state.settings.undoSendSeconds ?? 10);
   $('cacheLimitMB').value = String(state.settings.cacheLimitMB ?? 1024);
   if (document.activeElement !== $('senderName')) $('senderName').value = state.settings.senderName ?? '';
+  if (document.activeElement !== $('catboxUserhash')) $('catboxUserhash').value = state.settings.catboxUserhash ?? '';
+  if (document.activeElement !== $('x02ApiKey')) $('x02ApiKey').value = state.settings.x02ApiKey ?? '';
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
@@ -261,7 +267,13 @@ function renderRail() {
     html += `<button class="rail-btn${cls}${active(p.id)}" data-action="view" data-provider="${p.id}" title="${esc(p.name)}${accounts.length ? ` · ${n} unread` : ' · no accounts'}">
       ${pico(p.id, 'rail-icon')}${badge(n)}${problem ? '<span class="rail-warn"></span>' : ''}</button>`;
   }
-  html += `<span class="rail-spacer"></span>
+  html += '<span class="rail-spacer"></span>';
+  // File uploads (independent of the mail accounts).
+  for (const [id, u] of Object.entries(UPLOADERS)) {
+    html += `<button class="rail-btn upload${uploads?.current() === id ? ' active' : ''}" data-action="upload" data-service="${id}" title="Upload files to ${u.name}" aria-label="Upload files to ${u.name}">
+      <img class="rail-icon upload-icon" src="${u.icon}" alt=""></button>`;
+  }
+  html += `<span class="rail-sep"></span>
     <div class="menu-wrap"><button class="rail-btn add" data-action="add-menu" title="Add account" aria-label="Add account">${icon.plus}</button></div>`;
   return `<nav class="rail" aria-label="Providers">${html}</nav>`;
 }
@@ -1077,6 +1089,7 @@ function prefetchOnHover(button) {
 }
 
 async function openMessage(id, messageId, { folder, list } = {}) {
+  uploads?.close();
   const seq = ++openSeq;
   state.selected = { accountId: id, messageId, folder, list };
   state.message = null;
@@ -1234,6 +1247,8 @@ document.addEventListener('click', async (e) => {
     case 'add-menu':
       e.stopPropagation();
       return openAddMenu(el);
+    case 'upload':
+      return uploads?.toggle(el.dataset.service);
     case 'view':
       return setView(el.dataset.provider || null);
     case 'view-account':
@@ -1389,10 +1404,36 @@ async function showCacheUsage() {
   $('cacheUsage').textContent = `${size} used · ${emails} ${emails === 1 ? 'email' : 'emails'}, ${files} ${files === 1 ? 'file' : 'files'}`;
 }
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
+$('catboxUserhash').addEventListener('change', (e) => saveSettings({ catboxUserhash: e.target.value.trim() }));
+$('x02ApiKey').addEventListener('change', (e) => saveSettings({ x02ApiKey: e.target.value.trim() }));
+
+// ---------- file uploads (Catbox, x02) ----------
+
+uploads = createUploadPanel({
+  panel: $('uploadPanel'),
+  reader: $('reader'),
+  getSettings: () => state.settings,
+  toast,
+  openSettings: () => {
+    closeMenus();
+    $('settingsMenu').hidden = false;
+    fillClientIds();
+    showCacheUsage();
+    const field = uploads.current() === 'catbox' ? $('catboxUserhash') : $('x02ApiKey');
+    field.scrollIntoView({ block: 'nearest' });
+    field.focus();
+  },
+  onToggle: () => renderSidebar(),
+});
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const menuOpen = document.querySelector('.menu:not([hidden])');
   closeMenus();
+  // Esc closes the upload panel first (the email behind it stays open).
+  if (!menuOpen && uploads?.current() && !document.querySelector('dialog[open], .viewer') && !e.target.closest?.('.compose, input, textarea, select')) {
+    uploads.close();
+    return;
+  }
   // Esc also closes the open email, unless a menu, dialog, the composer or
   // the attachment viewer has the keyboard.
   if (!menuOpen && state.message && !document.querySelector('dialog[open], .viewer') && !e.target.closest?.('.compose, input, textarea, select')) {

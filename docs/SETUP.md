@@ -283,6 +283,26 @@ mark anything read.
 - Emails no longer listed for 14 days are removed, and removing an account removes
   its cached mail.
 
+## 11. Uploading files (Catbox, x02)
+
+The two icons above **+** in the left rail upload files and give you links to
+share: **x02** (top) and **Catbox**. Click one and the email area becomes a drop
+zone: drop files anywhere on it, or click it to choose files. Each file gets its
+own link; when the uploads finish the links are copied to the clipboard (one per
+line). Click any link to copy it again, or the arrow next to it to open it. The
+last 20 links per service stay listed under **Recent uploads**. Esc, the ✕ or the
+same icon closes the panel and brings the email back.
+
+- **Catbox:** up to 200 MB per file; .exe, .scr, .cpl, .doc* and .jar are refused.
+  Uploads are anonymous unless you add your userhash (catbox.moe → Manage
+  account) in **Settings → Uploads → Catbox userhash**.
+- **x02:** needs an API key from the x02 dashboard, in **Settings → Uploads → x02
+  API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
+  (1 hour to 30 days).
+- Uploaded files are public to anyone with the link. The userhash and API key are
+  kept in this Chrome profile and only sent to catbox.moe and up.x02.me.
+- Keep the app tab open until uploads finish (Chrome warns if you close it).
+
 ## Troubleshooting
 
 | Symptom | Fix |

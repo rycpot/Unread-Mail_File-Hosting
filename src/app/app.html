@@ -89,6 +89,17 @@
               <button type="button" class="link-btn" id="clearCache">Clear</button>
             </div>
           </section>
+          <section class="s-group">
+            <h3>Uploads</h3>
+            <div class="s-row">
+              <span class="s-label"><label for="catboxUserhash">Catbox userhash</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Optional. Uploads then go to your Catbox account instead of being anonymous. Find it at catbox.moe → Manage account. Only ever sent to catbox.moe.</span></button></span>
+              <input type="password" id="catboxUserhash" placeholder="Anonymous" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="s-row">
+              <span class="s-label"><label for="x02ApiKey">x02 API key</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Needed to upload to x02. Create one in the x02 dashboard. Only ever sent to up.x02.me.</span></button></span>
+              <input type="password" id="x02ApiKey" placeholder="Not set" autocomplete="off" spellcheck="false">
+            </div>
+          </section>
           <div class="s-foot">
             <span id="versionText"></span>
             <button type="button" class="link-btn" id="checkUpdate">Check for updates</button>
@@ -125,6 +136,7 @@
   <main class="split">
     <aside class="sidebar" id="sidebar" aria-label="Accounts and unread mail"></aside>
     <section class="reader" id="reader" aria-live="polite"></section>
+    <section class="upload-panel" id="uploadPanel" hidden></section>
   </main>
 
   <dialog class="dialog" id="imapDialog" aria-labelledby="imapTitle">

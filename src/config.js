@@ -18,6 +18,8 @@ export const DEFAULT_SETTINGS = {
   senderName: '',
   // Offline cache of bodies and attachments (MB; 0 = no limit).
   cacheLimitMB: 1024,
+  catboxUserhash: '',
+  x02ApiKey: '',
 };
 
 // How many unread messages to keep per account in the sidebar.

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Unread Mail",
   "description": "Unread mail from Gmail, Outlook, iCloud, Yahoo, AOL and Proton accounts in one tab.",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9TZ4HAW3MXRxt9s07BuJ07AKabVGvPaDt4GVwxDSYyLGsQkDt48D3YDCNwjnjJiAmyJF7cSAQSNcOs8Hof1TWcu/kstLNyHiGB4x5vN34JIZcaan+YBrWVtt8zTwCZ3t9wQjLlLR7je8I/RO7s6MB/vzhbH/t5lzApbj7B/lRhV4DTWApJnp9MuY+bMJYgj7HXrtxN3eprsQ2ABm83abVUlIB1+CepoE0cgt52c5FwyAitypfapX/gshSC4Evrdfn8hC4u/4tvGJ7TYNlpV2aOqiP6X9RvOJnzw4kQ5V64tJpwSGN2pzFulRsAMSz18Y2S0w06w/Kh7T0K1iC1U6wIDAQAB",
   "icons": {
@@ -21,14 +21,17 @@
     "scripting",
     "notifications",
     "offscreen",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://gmail.googleapis.com/*",
     "https://login.microsoftonline.com/*",
     "https://graph.microsoft.com/*",
     "https://mail.proton.me/*",
-    "https://account.proton.me/*"
+    "https://account.proton.me/*",
+    "https://catbox.moe/*",
+    "https://up.x02.me/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
