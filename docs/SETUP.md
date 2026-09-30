@@ -253,9 +253,11 @@ fill the app. **Reply**, **Reply all** and **Forward** are in the reader's toolb
 
 ## 9. Opening attachments
 
-PDFs (including password-protected statements), Word (.docx), Excel (.xlsx), CSV,
-images and text files open in the app; everything else downloads. The viewer has
-Download and Print (⌘P) at the top right. Old .doc/.xls files download only.
+Every attachment opens in the app. PDFs, Word (.docx) and Excel (.xlsx, .xls, .ods)
+files, password-protected ones included, CSV, images and any text file are shown;
+other files show a Download button (nothing downloads by itself). The arrows (or ←/→)
+move between an email's attachments; Download and Print (⌘P) are at the top right.
+Old .doc files are not previewed.
 
 ## Troubleshooting
 

@@ -1,4 +1,5 @@
 {
+  "0.8.1": "Fixes images in drafts saved by Gmail. Attachments: instant progress, faster iCloud/Yahoo/AOL downloads, arrows between attachments, password-protected Excel/Word, .xls, any text file, and a Download button instead of automatic downloads. From shows provider icons, Cc/Bcc can be hidden again, a close button for the open email, and dates read 30 Sep 2026 5:06PM.",
   "0.8.0": "Write email: compose, reply, reply all and forward from every account (Proton included), with drafts, inline images, attachments, address suggestions and undo send. Sent and Drafts at the bottom of the list. PDFs, Word and Excel attachments open in the app, with Print.",
   "0.7.6": "Emails open instantly the second time (last 30 are cached in memory, Proton included), and hovering an email loads it ahead of the click.",
   "0.7.5": "Recently read and Spam open in full (scrolling only if the window is too short) and show instantly from a cache while refreshing.",

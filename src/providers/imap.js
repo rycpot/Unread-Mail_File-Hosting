@@ -44,7 +44,8 @@ function imapProvider({ id, name, webUrl, passwordHelp }) {
 
     async getAttachment(account, messageId, attachment, { folder } = {}) {
       if (attachment.data) return base64ToBytes(attachment.data);
-      const res = await call(account, 'getAttachment', { id: messageId, attachmentId: attachment.id, folder });
+      // section + size let the helper fetch just this part (see the helper).
+      const res = await call(account, 'getAttachment', { id: messageId, attachmentId: attachment.id, section: attachment.section, size: attachment.size, folder });
       return base64ToBytes(res.data);
     },
 

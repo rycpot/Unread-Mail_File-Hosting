@@ -7,6 +7,7 @@
 //      also blocks tracking pixels until the user chooses to load them.
 
 import DOMPurify from '../vendor/purify.es.mjs';
+import { linkInlineImages } from './inline-images.js';
 
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A' && node.hasAttribute('href')) {
@@ -38,8 +39,8 @@ function textToHtml(text) {
   return `<pre class="plain">${linked}</pre>`;
 }
 
-// inlineImages: Map of content-id -> data: URL
-export function buildEmailDocument({ html, text }, { allowRemoteImages, inlineImages = new Map() }) {
+// inlineParts: [{ contentId, filename, url (data:) }] of the email's inline images.
+export function buildEmailDocument({ html, text }, { allowRemoteImages, inlineParts = [] }) {
   const doc = DOMPurify.sanitize(html ?? textToHtml(text), {
     WHOLE_DOCUMENT: true,
     RETURN_DOM: true,
@@ -48,11 +49,11 @@ export function buildEmailDocument({ html, text }, { allowRemoteImages, inlineIm
   }).ownerDocument;
 
   let remoteImages = 0;
+  linkInlineImages(doc, inlineParts);
   for (const img of doc.querySelectorAll('img[src]')) {
     const src = img.getAttribute('src');
-    if (/^cid:/i.test(src)) {
-      const dataUrl = inlineImages.get(decodeURIComponent(src.slice(4)));
-      if (dataUrl) img.setAttribute('src', dataUrl);
+    if (/^(cid:|data:)/i.test(src)) {
+      // resolved above, or an embedded image that is missing
     } else if (REMOTE_URL.test(src)) {
       remoteImages++;
     } else if (!/^data:/i.test(src)) {

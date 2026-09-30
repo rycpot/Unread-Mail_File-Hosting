@@ -8,10 +8,12 @@ import { refreshAccount } from '../sync.js';
 import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
 import { callHelper } from '../native.js';
 import { compareVersions, currentVersion } from '../update.js';
-import { openViewer, viewerKind } from './viewer.js';
+import { openViewer } from './viewer.js';
 import { closeWindow, initCompose, isComposeOpen, openCompose } from './compose.js';
 import { rememberAddresses } from './contacts.js';
 import { uiIcons } from './ui-icons.js';
+import { inlineParts } from './inline-images.js';
+import { fmtDate, fmtDateTime, fmtTime } from './format.js';
 
 // ---------- icons ----------
 
@@ -32,6 +34,7 @@ const icon = {
   remove: svg('<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>'),
   lock: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
   inbox: svg('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
+  close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
   clip: svg('<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'),
 };
 
@@ -66,18 +69,13 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // ---------- formatting ----------
 
-const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-const dayFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-const fullDateFmt = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-const longFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 function shortTime(ms) {
   if (!ms) return '';
   const d = new Date(ms);
   const now = new Date();
-  if (d.toDateString() === now.toDateString()) return timeFmt.format(d);
-  if (d.getFullYear() === now.getFullYear()) return dayFmt.format(d);
-  return fullDateFmt.format(d);
+  // Today: the time; otherwise the date (30 Sep 2026).
+  return d.toDateString() === now.toDateString() ? fmtTime(d) : fmtDate(d);
 }
 
 function ago(ms) {
@@ -1132,7 +1130,8 @@ async function openMessage(id, messageId, { folder, list } = {}) {
 
 async function loadInlineImages(provider, account, msg) {
   const map = new Map();
-  if (!msg.html?.includes('cid:')) return map;
+  // Emails with embedded images (by cid:, or linked as Gmail drafts do).
+  if (!msg.html || !msg.attachments.some((x) => x.inline || x.contentId)) return map;
   const inline = msg.attachments.filter((x) => x.inline || x.contentId);
   await Promise.all(
     inline.map(async (att) => {
@@ -1141,7 +1140,10 @@ async function loadInlineImages(provider, account, msg) {
         let bytes;
         if (provider.resolveInline) ({ contentId: cid, bytes } = await provider.resolveInline(account, msg.id, att));
         else bytes = await provider.getAttachment(account, msg.id, att, { folder: msg.folder });
-        if (cid) map.set(cid, bytesToDataUrl(bytes, att.mimeType));
+        if (cid) {
+          att.contentId = cid; // Outlook only tells it here
+          map.set(cid, bytesToDataUrl(bytes, att.mimeType));
+        }
       } catch (e) {
         console.warn('inline image failed', e);
       }
@@ -1155,7 +1157,7 @@ function renderReader() {
   const allowRemote = state.settings.loadRemoteImages || state.showRemoteImages;
   const { srcdoc, remoteImages } = msg.encrypted
     ? { srcdoc: '', remoteImages: 0 }
-    : buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineImages: msg.inlineImages });
+    : buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineParts: inlineParts(msg) });
   const files = msg.attachments.filter((x) => !x.inline);
   const rcpt = (label, list) =>
     list.length ? `<div class="meta-rcpt" title="${esc(list.map((r) => r.email).join(', '))}">${label} ${esc(list.map(displayName).join(', '))}</div>` : '';
@@ -1170,7 +1172,7 @@ function renderReader() {
           <div class="meta-from"><strong>${esc(displayName(msg.from))}</strong> <span class="addr">&lt;${esc(msg.from.email)}&gt;</span></div>
           ${rcpt('To:', msg.to)}${rcpt('Cc:', msg.cc)}
         </div>
-        <div class="meta-date">${msg.date ? longFmt.format(new Date(msg.date)) : ''}</div>
+        <div class="meta-date">${msg.date ? fmtDateTime(msg.date) : ''}</div>
       </div>
     </div>
     ${remoteImages && !allowRemote ? `<div class="banner"><span>Remote images are blocked so the sender can't tell you opened this email.</span>
@@ -1206,12 +1208,23 @@ function renderReaderToolbar() {
       ${btn('trash', uiIcons.delete, 'Delete', ' danger')}
     </span>
     <span class="spacer"></span>
-    ${msg.webUrl ? `<span class="open-web">${pico(state.accounts[msg.accountId]?.provider, 'open-web-icon')}<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button></span>` : ''}`;
+    ${msg.webUrl ? `<span class="open-web">${pico(state.accounts[msg.accountId]?.provider, 'open-web-icon')}<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button></span>` : ''}
+    ${btn('close-reader', icon.close, 'Close (Esc)', ' close-reader')}`;
 }
 
+// Attachment bytes, kept for the tab's lifetime (last 40), so reopening or
+// moving between attachments is instant.
+const attachmentCache = new Map();
 async function attachmentBytes(msg, att) {
-  const a = state.accounts[msg.accountId];
-  return providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
+  const key = `${msg.accountId}|${msg.folder ?? ''}|${msg.id}|${att.id ?? att.filename}|${att.filename}`;
+  if (!attachmentCache.has(key)) {
+    const a = state.accounts[msg.accountId];
+    const p = providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
+    attachmentCache.set(key, p);
+    p.catch(() => attachmentCache.delete(key));
+    while (attachmentCache.size > 40) attachmentCache.delete(attachmentCache.keys().next().value);
+  }
+  return attachmentCache.get(key);
 }
 
 function saveBytes(bytes, att) {
@@ -1221,27 +1234,16 @@ function saveBytes(bytes, att) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-async function downloadAttachment(index) {
+// Every attachment opens in the viewer (files without a preview offer a
+// Download button there); the arrows move through the email's attachments.
+function openAttachment(index) {
   const msg = state.message;
-  const att = msg.attachments[index];
-  try {
-    saveBytes(await attachmentBytes(msg, att), att);
-  } catch (e) {
-    toast(`Download failed: ${e.message}`, { error: true });
-  }
-}
-
-// PDFs, Word, Excel, images and text open in the viewer; anything else downloads.
-async function openAttachment(index) {
-  const msg = state.message;
-  const att = msg.attachments[index];
-  if (!viewerKind(att.filename, att.mimeType)) return downloadAttachment(index);
-  try {
-    const bytes = await attachmentBytes(msg, att);
-    await openViewer({ filename: att.filename, mimeType: att.mimeType, bytes }, { onDownload: () => saveBytes(bytes, att) });
-  } catch (e) {
-    toast(`Couldn't open ${att.filename}: ${e.message}`, { error: true });
-  }
+  const files = msg.attachments.filter((x) => !x.inline);
+  const start = Math.max(0, files.indexOf(msg.attachments[index]));
+  openViewer(
+    files.map((att) => ({ filename: att.filename, mimeType: att.mimeType, size: att.size, load: () => attachmentBytes(msg, att) })),
+    { index: start, onDownload: (file, bytes) => saveBytes(bytes, file) },
+  );
 }
 
 // ---------- event wiring ----------
@@ -1357,6 +1359,9 @@ document.addEventListener('click', async (e) => {
       return withBusy(el, () => trashMessage(state.message.accountId, state.message.id, state.message.folder));
     case 'not-spam':
       return withBusy(el, () => notSpam(state.message.accountId, state.message.id));
+    case 'close-reader':
+      openSeq++;
+      return closeReader();
     case 'open-web':
       return chrome.tabs.create({ url: state.message.webUrl });
     case 'show-images':
@@ -1367,7 +1372,7 @@ document.addEventListener('click', async (e) => {
       state.settings.loadRemoteImages = true;
       return renderReader();
     case 'download':
-      return withBusy(el, () => openAttachment(Number(el.dataset.index)));
+      return openAttachment(Number(el.dataset.index));
   }
 });
 
@@ -1397,7 +1402,17 @@ $('testNotify').addEventListener('click', async () => {
 $('showHidden').addEventListener('change', (e) => saveSettings({ showHidden: e.target.checked }));
 $('undoSendSeconds').addEventListener('change', (e) => saveSettings({ undoSendSeconds: Number(e.target.value) }));
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
-document.addEventListener('keydown', (e) => e.key === 'Escape' && closeMenus());
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const menuOpen = document.querySelector('.menu:not([hidden])');
+  closeMenus();
+  // Esc also closes the open email, unless a menu, dialog, the composer or
+  // the attachment viewer has the keyboard.
+  if (!menuOpen && state.message && !document.querySelector('dialog[open], .viewer') && !e.target.closest?.('.compose, input, textarea, select')) {
+    openSeq++;
+    closeReader();
+  }
+});
 
 $('redirectUri').textContent = chrome.identity.getRedirectURL();
 async function fillClientIds() {

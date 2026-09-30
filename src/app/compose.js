@@ -18,6 +18,8 @@ import { newMessageId, replyReferences } from '../compose/mime.js';
 import { parseAddressList } from '../util.js';
 import { rememberAddresses, suggest } from './contacts.js';
 import { uiIcons } from './ui-icons.js';
+import { inlineParts, linkInlineImages } from './inline-images.js';
+import { fmtDateTime } from './format.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -26,6 +28,7 @@ const ICON = {
   expand: svg('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'),
   shrink: svg('<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>'),
   minimize: svg('<path d="M5 12h14"/>'),
+  chevron: svg('<path d="m6 9 6 6 6-6"/>'),
   bold: svg('<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>'),
   italic: svg('<path d="M19 4h-9M14 20H5M15 4 9 20"/>'),
   alignLeft: svg('<path d="M4 6h16M4 10h10M4 14h16M4 18h10"/>'),
@@ -55,7 +58,6 @@ export function initCompose(options) {
 export const isComposeOpen = () => Boolean(win);
 
 const formatSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
-const longDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const display = (a) => (a.name && a.name !== a.email ? a.name : a.email);
 const validEmail = (e) => /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(e ?? '');
 const sameAddress = (a, b) => a?.toLowerCase() === b?.toLowerCase();
@@ -158,9 +160,9 @@ function dedupe(list, excludeEmails = []) {
 }
 
 function quoteHtml(state, m, mode) {
-  const body = sanitizeForEditor(m.html ?? `<pre style="white-space:pre-wrap">${esc(m.text ?? '')}</pre>`, state, m.inlineImages);
+  const body = sanitizeForEditor(m.html ?? `<pre style="white-space:pre-wrap">${esc(m.text ?? '')}</pre>`, state, m);
   const who = m.from?.name ? `${esc(m.from.name)} &lt;${esc(m.from.email)}&gt;` : esc(m.from?.email ?? '');
-  const when = m.date ? longDate.format(new Date(m.date)) : '';
+  const when = m.date ? fmtDateTime(m.date) : '';
   if (mode === 'forward') {
     const list = (xs) => (xs ?? []).map((a) => (a.name ? `${esc(a.name)} &lt;${esc(a.email)}&gt;` : esc(a.email))).join(', ');
     return `<div>---------- Forwarded message ---------<br>From: ${who}<br>Date: ${esc(when)}<br>Subject: ${esc(m.subject ?? '')}<br>To: ${list(m.to)}${m.cc?.length ? `<br>Cc: ${list(m.cc)}` : ''}<br><br></div>${body}`;
@@ -170,25 +172,22 @@ function quoteHtml(state, m, mode) {
 
 // Email HTML made safe to edit: no scripts, forms or styles that could leak;
 // embedded (cid:) images become editable data: images.
-function sanitizeForEditor(html, state, inlineImages = new Map()) {
+// Email HTML made safe to edit: no scripts, forms or styles that could leak;
+// embedded images become editable data: images with fresh content ids.
+function sanitizeForEditor(html, state, message) {
   const doc = DOMPurify.sanitize(html, {
     RETURN_DOM: true,
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea', 'base', 'meta', 'link', 'title'],
     FORBID_ATTR: ['action', 'formaction', 'contenteditable'],
   });
-  for (const img of doc.querySelectorAll('img[src^="cid:" i]')) {
-    const cid = decodeURIComponent(img.getAttribute('src').slice(4));
-    const url = inlineImages.get(cid);
-    if (!url) {
-      img.remove();
-      continue;
-    }
-    const newCid = makeCid();
-    const { bytes, mimeType } = dataUrlToBytes(url);
-    state.inline.set(newCid, { cid: newCid, filename: `image-${state.inline.size + 1}.${mimeType.split('/')[1] || 'png'}`, mimeType, bytes });
-    img.setAttribute('src', url);
-    img.setAttribute('data-cid', newCid);
-  }
+  linkInlineImages(doc, message ? inlineParts(message) : [], (img, part) => {
+    const cid = makeCid();
+    const { bytes, mimeType } = dataUrlToBytes(part.url);
+    state.inline.set(cid, { cid, filename: part.filename || `image-${state.inline.size + 1}.${mimeType.split('/')[1] || 'png'}`, mimeType, bytes });
+    img.setAttribute('data-cid', cid);
+  });
+  // Embedded references that could not be resolved would show as broken.
+  for (const img of doc.querySelectorAll('img[src^="cid:" i]')) img.remove();
   return doc.innerHTML;
 }
 
@@ -211,27 +210,24 @@ async function loadDraft(state, ref) {
     parentId: d.parentId ?? null,
     accountId: state.accountId,
   };
-  // Inline images back into the editor; other files as attachments.
-  const inlineUrls = new Map();
-  for (const a of d.attachments) {
-    if (a.inline && a.contentId) {
-      state.inline.set(a.contentId, { cid: a.contentId, filename: a.filename, mimeType: a.mimeType, bytes: a.bytes, serverId: a.serverId, keyPackets: a.keyPackets });
-      inlineUrls.set(a.contentId, bytesToDataUrl(a.bytes, a.mimeType));
-    } else {
-      addAttachment(state, { filename: a.filename, mimeType: a.mimeType, bytes: a.bytes, serverId: a.serverId, keyPackets: a.keyPackets }, { dirty: false });
-    }
-  }
-  let html = DOMPurify.sanitize(d.html ?? `<div>${esc(d.text ?? '').replace(/\n/g, '<br>')}</div>`, {
+  // Inline images back into the editor (matched even when the draft was last
+  // saved by a webmail that links them differently); other files, and any
+  // inline image that no longer appears in the text, become attachments so
+  // nothing is lost.
+  const isInlineImage = (a) => a.contentId && (a.inline || /^image\//.test(a.mimeType ?? ''));
+  const parts = d.attachments.filter(isInlineImage).map((a) => ({ ...a, url: bytesToDataUrl(a.bytes, a.mimeType) }));
+  const html = DOMPurify.sanitize(d.html ?? `<div>${esc(d.text ?? '').replace(/\n/g, '<br>')}</div>`, {
     RETURN_DOM: true,
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea', 'base', 'meta', 'link', 'title'],
   });
-  for (const img of html.querySelectorAll('img[src^="cid:" i]')) {
-    const cid = decodeURIComponent(img.getAttribute('src').slice(4));
-    if (inlineUrls.has(cid)) {
-      img.setAttribute('src', inlineUrls.get(cid));
-      img.setAttribute('data-cid', cid);
-    }
+  const unused = linkInlineImages(html, parts, (img, part) => {
+    state.inline.set(part.contentId, { cid: part.contentId, filename: part.filename, mimeType: part.mimeType, bytes: part.bytes, serverId: part.serverId, keyPackets: part.keyPackets });
+    img.setAttribute('data-cid', part.contentId);
+  });
+  for (const a of [...d.attachments.filter((x) => !isInlineImage(x)), ...unused]) {
+    addAttachment(state, { filename: a.filename, mimeType: a.mimeType, bytes: a.bytes, serverId: a.serverId, keyPackets: a.keyPackets }, { dirty: false });
   }
+  if (unused.length) console.info(`[compose] ${unused.length} inline image(s) not referenced by the text were kept as attachments`);
   setEditorHtml(state, html.innerHTML);
   state.dirty = false;
 }
@@ -248,10 +244,18 @@ async function resolveSenderName(state) {
 
 // ---------- window ----------
 
-function accountOptions(selectedId) {
+const providerIcon = (id) => `<img class="pico" src="../../icons/providers/${id}.png" alt="">`;
+
+// The From picker: every account with its provider's icon.
+function fromButton(state) {
+  const a = env.accounts()[state.accountId];
+  return `${providerIcon(a?.provider)}<span class="cmp-from-email">${esc(a?.email ?? '')}</span>${ICON.chevron}`;
+}
+
+function fromMenu(state) {
   return Object.values(env.accounts())
     .sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0))
-    .map((a) => `<option value="${esc(a.id)}"${a.id === selectedId ? ' selected' : ''}>${esc(a.email)} · ${esc(providers[a.provider]?.name ?? '')}</option>`)
+    .map((a) => `<li role="option" data-from="${esc(a.id)}"${a.id === state.accountId ? ' aria-selected="true" class="on"' : ''}>${providerIcon(a.provider)}<span>${esc(a.email)}</span></li>`)
     .join('');
 }
 
@@ -275,7 +279,11 @@ function render(state) {
       <button class="cmp-icon" data-c="close" title="Save and close">${ICON.close}</button>
     </header>
     <div class="cmp-body">
-      <label class="cmp-row cmp-from"><span>From</span><select class="cmp-from-select">${accountOptions(state.accountId)}</select></label>
+      <div class="cmp-row cmp-from"><span>From</span>
+        <div class="cmp-from-wrap">
+          <button type="button" class="cmp-from-btn" data-c="from" aria-haspopup="listbox">${fromButton(state)}</button>
+          <ul class="cmp-from-menu" role="listbox" hidden>${fromMenu(state)}</ul>
+        </div></div>
       <div class="cmp-row" data-field="to"><span>To</span><div class="cmp-recips" data-list="to"></div>
         <button class="cmp-link" data-c="show-cc">Cc Bcc</button></div>
       <div class="cmp-row" data-field="cc" hidden><span>Cc</span><div class="cmp-recips" data-list="cc"></div></div>
@@ -404,7 +412,9 @@ function renderRecipients(state) {
   }
   state.el.querySelector('[data-field="cc"]').hidden = !state.showCc;
   state.el.querySelector('[data-field="bcc"]').hidden = !state.showCc;
-  state.el.querySelector('[data-c="show-cc"]').hidden = state.showCc;
+  // The toggle stays; collapsed with addresses still in Cc/Bcc it shows how many.
+  const hiddenCount = state.showCc ? 0 : state.cc.length + state.bcc.length;
+  state.el.querySelector('[data-c="show-cc"]').textContent = state.showCc ? 'Hide Cc Bcc' : `Cc Bcc${hiddenCount ? ` (${hiddenCount})` : ''}`;
 }
 
 function commitText(state, field, text) {
@@ -591,7 +601,7 @@ function exec(state, cmd, value = null) {
 }
 
 function closePops(state) {
-  for (const p of state.el.querySelectorAll('.cmp-pop')) p.hidden = true;
+  for (const p of state.el.querySelectorAll('.cmp-pop, .cmp-from-menu')) p.hidden = true;
 }
 
 function openLinkForm(state) {
@@ -1001,10 +1011,16 @@ function wire(state) {
         b.title = state.full ? 'Back to a small window' : 'Full window';
         return;
       case 'show-cc':
-        state.showCc = true;
+        state.showCc = !state.showCc;
         renderRecipients(state);
-        el.querySelector('[data-list="cc"] input').focus();
+        if (state.showCc) el.querySelector('[data-list="cc"] input').focus();
         return;
+      case 'from': {
+        const menu = el.querySelector('.cmp-from-menu');
+        menu.innerHTML = fromMenu(state);
+        menu.hidden = !menu.hidden;
+        return;
+      }
       case 'align': {
         const pop = el.querySelector('.cmp-align');
         const open = pop.hidden;
@@ -1013,6 +1029,8 @@ function wire(state) {
         return;
       }
       case 'link':
+        // A second click closes it again.
+        if (!el.querySelector('.cmp-linkform').hidden) return closePops(state);
         return openLinkForm(state);
       case 'attach': {
         const zone = el.querySelector('.cmp-dropzone');
@@ -1028,7 +1046,13 @@ function wire(state) {
     }
   });
   el.querySelector('.cmp-head').addEventListener('dblclick', () => el.classList.remove('min'));
-  el.querySelector('.cmp-from-select').addEventListener('change', (e) => changeFrom(state, e.target.value));
+  el.querySelector('.cmp-from-menu').addEventListener('click', async (e) => {
+    const li = e.target.closest('[data-from]');
+    if (!li) return;
+    el.querySelector('.cmp-from-menu').hidden = true;
+    await changeFrom(state, li.dataset.from);
+    el.querySelector('.cmp-from-btn').innerHTML = fromButton(state);
+  });
   el.querySelector('.cmp-subject').addEventListener('input', () => markDirty(state));
   el.querySelector('.cmp-linkform').addEventListener('submit', (e) => {
     e.preventDefault();

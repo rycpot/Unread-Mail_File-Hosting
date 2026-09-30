@@ -38,7 +38,7 @@ import time
 import urllib.request
 import zipfile
 
-VERSION = 5
+VERSION = 6
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -379,6 +379,29 @@ def leaf_parts(msg):
     return [p for p in msg.walk() if not p.is_multipart()]
 
 
+def leaf_sections(msg):
+    """IMAP section numbers (RFC 3501 6.4.5) of the leaf parts, in the same
+    order as leaf_parts(), so one attachment can be fetched on its own."""
+    out = []
+
+    def rec(part, path):
+        if part.get_content_type() == 'message/rfc822' and part.is_multipart():
+            inner = part.get_payload()[0]
+            if inner.is_multipart():
+                for i, child in enumerate(inner.get_payload(), 1):
+                    rec(child, '{}.{}'.format(path, i))
+            else:
+                out.append('{}.1'.format(path))
+        elif part.is_multipart():
+            for i, child in enumerate(part.get_payload(), 1):
+                rec(child, '{}.{}'.format(path, i) if path else str(i))
+        else:
+            out.append(path or '1')
+
+    rec(msg, '')
+    return out
+
+
 def cmd_get_message(req):
     conn = connect(req['provider'], req['email'])
     try:
@@ -398,6 +421,7 @@ def cmd_get_message(req):
         except (LookupError, UnicodeDecodeError):
             html_source = ''
     attachments = []
+    sections = leaf_sections(msg)
     for index, part in enumerate(leaf_parts(msg)):
         if id(part) in body_parts:
             continue
@@ -409,6 +433,7 @@ def cmd_get_message(req):
         inline = bool(content_id) and (('cid:' + content_id) in html_source or disposition == 'inline')
         attachments.append({
             'id': str(index),
+            'section': sections[index] if index < len(sections) else None,
             'filename': part.get_filename() or content_id or 'attachment',
             'mimeType': part.get_content_type(),
             'size': len(payload),
@@ -455,11 +480,44 @@ def addresses(values):
             for n, a in email.utils.getaddresses([str(v) for v in values or []]) if a]
 
 
+def _fetch_section(conn, uid, section):
+    """One MIME part, decoded; None if the server's answer is unusable."""
+    typ, data = conn.uid('FETCH', uid, '(BODY.PEEK[{0}.MIME] BODY.PEEK[{0}])'.format(section))
+    if typ != 'OK':
+        return None
+    mime_hdr, body = None, None
+    for item in data:
+        if isinstance(item, tuple):
+            meta = _text(item[0])
+            if '{}.MIME]'.format(section) in meta:
+                mime_hdr = item[1]
+            elif 'BODY[{}]'.format(section) in meta:
+                body = item[1]
+    if body is None:
+        return None
+    cte = ''
+    if mime_hdr:
+        cte = (email.message_from_bytes(mime_hdr).get('Content-Transfer-Encoding') or '').strip().lower()
+    if cte == 'base64':
+        return base64.b64decode(body, validate=False)
+    if cte == 'quoted-printable':
+        import quopri
+        return quopri.decodestring(body)
+    return body
+
+
 def cmd_get_attachment(req):
     conn = connect(req['provider'], req['email'])
     try:
         uidvalidity = open_folder(conn, req, readonly=True)
         (uid,) = parse_ids([req['id']], uidvalidity)
+        # Fast path: fetch just this part. It is trusted only if its size
+        # matches what the full email said; otherwise fetch the whole email.
+        section = req.get('section')
+        if section and re.fullmatch(r'\d+(\.\d+)*', str(section)):
+            payload = _fetch_section(conn, uid, section)
+            if payload is not None and (req.get('size') is None or len(payload) == int(req['size'])):
+                return {'data': base64.b64encode(payload).decode('ascii')}
         _, raw = fetch_raw(conn, uid)
     finally:
         _logout(conn)

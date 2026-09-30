@@ -1,5 +1,8 @@
-// Attachment viewer: PDFs (with password), Word (.docx), Excel (.xlsx), CSV,
-// images and text open in a full-window overlay with Download and Print.
+// Attachment viewer: PDFs and Office files (with passwords), Word (.docx),
+// Excel (.xlsx/.xls/.ods), CSV, images and text open in a full-window
+// overlay with Download and Print; the arrows move between the email's
+// attachments. Files without a preview show a Download button (nothing is
+// downloaded without asking).
 //
 // Untrusted content is kept inert:
 //   * PDFs are drawn onto canvases by PDF.js with its scripting off.
@@ -7,9 +10,11 @@
 //     in a sandboxed iframe that cannot run scripts or load anything remote.
 
 import DOMPurify from '../vendor/purify.es.mjs';
+import { fmtDate, fmtDateTime } from './format.js';
 
 const VENDOR = chrome.runtime.getURL('src/vendor/');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const formatSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const ICON = {
@@ -19,34 +24,83 @@ const ICON = {
   zoomIn: svg('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/>'),
   zoomOut: svg('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6"/>'),
   lock: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  prev: svg('<path d="m15 18-6-6 6-6"/>'),
+  next: svg('<path d="m9 18 6-6-6-6"/>'),
+  file: svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>'),
 };
 
-// Which viewer handles a file, from its type or name; null = download only.
+// Which viewer handles a file, from its type or name; null = decide from the
+// content (shown as text unless it looks binary; see decodeText).
 export function viewerKind(filename = '', mimeType = '') {
   const ext = filename.toLowerCase().split('.').pop();
   const type = mimeType.toLowerCase();
   if (type === 'application/pdf' || ext === 'pdf') return 'pdf';
   if (ext === 'docx' || type.includes('wordprocessingml')) return 'docx';
-  if (ext === 'xlsx' || type.includes('spreadsheetml')) return 'xlsx';
+  if (['xlsx', 'xls', 'xlsm', 'ods'].includes(ext) || type.includes('spreadsheetml') || type === 'application/vnd.ms-excel' || type.includes('opendocument.spreadsheet')) return 'sheet';
   if (ext === 'csv' || type === 'text/csv') return 'csv';
   if (/^image\/(png|jpe?g|gif|webp|bmp|svg\+xml)$/.test(type) || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext)) return 'image';
-  if (type.startsWith('text/') || ['txt', 'log', 'md', 'json', 'xml', 'ics', 'vcf'].includes(ext)) return 'text';
   return null;
+}
+
+// Plain text is recognised by content, never by extension (the method of the
+// author's Minimal Editor): a known binary signature, a NUL byte or more than
+// 10% control characters means binary; anything else is text, decoded as
+// UTF-8, UTF-16 when it starts with a byte-order mark, or Windows-1252 when
+// it is not valid UTF-8 (older single-byte files).
+const BINARY_SIGNATURES = [
+  [0x25, 0x50, 0x44, 0x46, 0x2d], // %PDF-
+  [0x89, 0x50, 0x4e, 0x47], // PNG
+  [0xff, 0xd8, 0xff], // JPEG
+  [0x47, 0x49, 0x46, 0x38], // GIF
+  [0x50, 0x4b, 0x03, 0x04], // ZIP (docx, jar, …)
+  [0x1f, 0x8b], // gzip
+  [0x7f, 0x45, 0x4c, 0x46], // ELF
+  [0xd0, 0xcf, 0x11, 0xe0], // OLE (legacy Office)
+];
+
+function looksBinary(bytes) {
+  if (BINARY_SIGNATURES.some((sig) => sig.every((b, i) => bytes[i] === b))) return true;
+  const n = Math.min(bytes.length, 8192);
+  let odd = 0;
+  for (let i = 0; i < n; i++) {
+    const b = bytes[i];
+    if (b === 0) return true;
+    if ((b < 32 && ![8, 9, 10, 11, 12, 13, 27].includes(b)) || b === 127) odd++;
+  }
+  return n > 0 && odd / n > 0.1;
+}
+
+// The text of a file, or null when it is not text.
+function decodeText(bytes) {
+  try {
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le', { fatal: true }).decode(bytes.subarray(2));
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be', { fatal: true }).decode(bytes.subarray(2));
+    const body = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? bytes.subarray(3) : bytes;
+    if (looksBinary(bytes)) return null;
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(body);
+    } catch {
+      return new TextDecoder('windows-1252').decode(body);
+    }
+  } catch {
+    return null;
+  }
 }
 
 let current = null; // { close }
 
-// file: { filename, mimeType, bytes: Uint8Array }; onDownload(): save it.
-export async function openViewer(file, { onDownload } = {}) {
+// files: [{ filename, mimeType, size, load: () => Promise<Uint8Array> }]
+// index: the file to show first. onDownload(file, bytes) saves one.
+export function openViewer(files, { index = 0, onDownload } = {}) {
   current?.close();
-  const kind = viewerKind(file.filename, file.mimeType);
   const overlay = document.createElement('div');
   overlay.className = 'viewer';
   overlay.innerHTML = `
     <div class="viewer-bar">
-      <span class="viewer-name" title="${esc(file.filename)}">${esc(file.filename)}</span>
+      <span class="viewer-name"></span>
       <span class="viewer-pages"></span>
       <span class="viewer-spacer"></span>
+      <span class="viewer-count"></span>
       <span class="viewer-zoom" hidden>
         <button class="viewer-btn" data-v="zoom-out" title="Zoom out">${ICON.zoomOut}</button>
         <button class="viewer-btn" data-v="zoom-in" title="Zoom in">${ICON.zoomIn}</button>
@@ -55,68 +109,159 @@ export async function openViewer(file, { onDownload } = {}) {
       <button class="viewer-btn" data-v="print" title="Print (⌘P)" disabled>${ICON.print}</button>
       <button class="viewer-btn" data-v="close" title="Close (Esc)">${ICON.close}</button>
     </div>
-    <div class="viewer-body"><div class="viewer-status">Opening…</div></div>`;
+    <div class="viewer-main">
+      <button class="viewer-nav prev" data-v="prev" title="Previous attachment (←)" hidden>${ICON.prev}</button>
+      <div class="viewer-body"></div>
+      <button class="viewer-nav next" data-v="next" title="Next attachment (→)" hidden>${ICON.next}</button>
+    </div>`;
   document.body.appendChild(overlay);
   const body = overlay.querySelector('.viewer-body');
   const printBtn = overlay.querySelector('[data-v="print"]');
-  let printer = null; // () => Promise<void>, set once the file is shown
+  let idx = index;
+  let token = 0; // bumps on every navigation; stale loads stop
+  let printer = null;
   let zoomBy = null;
   let cleanup = () => {};
+  let bytesNow = null;
 
-  const close = () => {
+  const runCleanup = () => {
     try {
       cleanup();
     } catch (e) {
       console.warn('[viewer] cleanup', e);
     }
+    cleanup = () => {};
+  };
+  const close = () => {
+    token++;
+    runCleanup();
     overlay.remove();
     document.removeEventListener('keydown', onKey, true);
     if (current?.overlay === overlay) current = null;
   };
   const doPrint = () => printer && printer().catch((e) => showStatus(body, `Couldn't print: ${e.message}`, true));
+  const go = (delta) => {
+    const next = idx + delta;
+    if (next >= 0 && next < files.length) show(next);
+  };
   function onKey(e) {
-    if (e.key === 'Escape' && !e.target.closest?.('.viewer-password')) close();
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
+    const typing = e.target.closest?.('input, textarea');
+    if (e.key === 'Escape' && !typing) {
+      e.stopPropagation(); // the email behind stays open
+      close();
+    }
+    else if (e.key === 'ArrowLeft' && !typing) go(-1);
+    else if (e.key === 'ArrowRight' && !typing) go(1);
+    else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault();
       doPrint();
     }
   }
   document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('click', (e) => {
+  overlay.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-v]');
     if (!b) return;
-    if (b.dataset.v === 'close') close();
-    else if (b.dataset.v === 'download') onDownload?.();
-    else if (b.dataset.v === 'print') doPrint();
-    else if (b.dataset.v === 'zoom-in') zoomBy?.(1.2);
-    else if (b.dataset.v === 'zoom-out') zoomBy?.(1 / 1.2);
+    const v = b.dataset.v;
+    if (v === 'close') close();
+    else if (v === 'prev') go(-1);
+    else if (v === 'next') go(1);
+    else if (v === 'print') doPrint();
+    else if (v === 'zoom-in') zoomBy?.(1.2);
+    else if (v === 'zoom-out') zoomBy?.(1 / 1.2);
+    else if (v === 'download') {
+      const file = files[idx];
+      try {
+        onDownload?.(file, bytesNow ?? (await file.load()));
+      } catch (err) {
+        showStatus(body, `Download failed: ${err.message}`, true);
+      }
+    }
   });
   current = { close, overlay };
 
-  const ready = (result) => {
-    printer = result.print;
-    zoomBy = result.zoom ?? null;
-    cleanup = result.cleanup ?? cleanup;
-    printBtn.disabled = !printer;
-    overlay.querySelector('.viewer-zoom').hidden = !zoomBy;
-  };
-  try {
-    if (kind === 'pdf') await showPdf(file, body, overlay, ready);
-    else if (kind === 'docx') ready(await showDocx(file, body));
-    else if (kind === 'xlsx') ready(await showXlsx(file, body));
-    else if (kind === 'csv') ready(showHtml(body, file.filename, tableHtml(parseCsv(new TextDecoder().decode(file.bytes)))));
-    else if (kind === 'image') ready(showImage(file, body));
-    else if (kind === 'text') ready(showHtml(body, file.filename, `<pre class="plain">${esc(new TextDecoder().decode(file.bytes))}</pre>`));
-    else showStatus(body, 'This file type can’t be previewed. Use Download to open it.');
-  } catch (e) {
-    console.warn('[viewer]', e);
-    showStatus(body, `Couldn't open this file: ${e.message}`, true);
+  async function show(i) {
+    const my = ++token;
+    idx = i;
+    runCleanup();
+    printer = null;
+    zoomBy = null;
+    bytesNow = null;
+    printBtn.disabled = true;
+    overlay.querySelector('.viewer-zoom').hidden = true;
+    const file = files[i];
+    overlay.querySelector('.viewer-name').textContent = file.filename;
+    overlay.querySelector('.viewer-name').title = file.filename;
+    overlay.querySelector('.viewer-pages').textContent = '';
+    overlay.querySelector('.viewer-count').textContent = files.length > 1 ? `${i + 1} of ${files.length}` : '';
+    overlay.querySelector('[data-v="prev"]').hidden = files.length < 2;
+    overlay.querySelector('[data-v="next"]').hidden = files.length < 2;
+    overlay.querySelector('[data-v="prev"]').disabled = i === 0;
+    overlay.querySelector('[data-v="next"]').disabled = i === files.length - 1;
+    const alive = () => my === token;
+    const ready = (result) => {
+      if (!alive()) return result?.cleanup?.();
+      printer = result.print ?? null;
+      zoomBy = result.zoom ?? null;
+      cleanup = result.cleanup ?? (() => {});
+      printBtn.disabled = !printer;
+      overlay.querySelector('.viewer-zoom').hidden = !zoomBy;
+    };
+    showStatus(body, `Downloading ${file.filename}${file.size ? ` (${formatSize(file.size)})` : ''}…`, false, true);
+    try {
+      const bytes = await file.load();
+      if (!alive()) return;
+      bytesNow = bytes;
+      showStatus(body, 'Opening…', false, true);
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+      const ctx = { file: { ...file, bytes }, body, overlay, ready, alive };
+      const kind = viewerKind(file.filename, file.mimeType);
+      const text = kind ? null : decodeText(bytes);
+      if (kind === 'pdf') await showPdf(ctx);
+      else if (kind === 'docx') await showDocx(ctx);
+      else if (kind === 'sheet') await showSheet(ctx);
+      else if (kind === 'csv') ready(showHtml(body, file.filename, sheetHtml([{ name: file.filename, rows: parseCsv(decodeText(bytes) ?? '') }])));
+      else if (kind === 'image') ready(showImage(ctx.file, body));
+      else if (text != null) ready(showHtml(body, file.filename, `<pre class="plain">${esc(text)}</pre>`));
+      else noPreview(body, file);
+    } catch (e) {
+      if (!alive()) return;
+      console.warn('[viewer]', e);
+      showStatus(body, `Couldn't open this file: ${e.message}`, true);
+    }
   }
+  show(idx);
   return { close };
 }
 
-function showStatus(body, text, error = false) {
-  body.innerHTML = `<div class="viewer-status${error ? ' error' : ''}">${esc(text)}</div>`;
+function showStatus(body, text, error = false, busy = false) {
+  body.innerHTML = `<div class="viewer-status${error ? ' error' : ''}">${busy ? '<span class="viewer-spinner"></span>' : ''}${esc(text)}</div>`;
+}
+
+function noPreview(body, file) {
+  body.innerHTML = `<div class="viewer-none">${ICON.file}
+    <p><strong>${esc(file.filename)}</strong><br>No preview is available for this type of file.</p>
+    <button class="tool-btn primary" data-v="download">${ICON.download}Download${file.size ? ` (${formatSize(file.size)})` : ''}</button></div>`;
+}
+
+// Asks for a password inside the viewer. Resolves with it (or null if closed).
+function askPassword(body, { what, wrong }) {
+  return new Promise((resolve) => {
+    body.innerHTML = `<form class="viewer-password">
+        <div class="viewer-lock">${ICON.lock}</div>
+        <p><strong>This ${esc(what)} is password-protected.</strong><br>Enter its password to open it.</p>
+        <input type="password" autocomplete="off" spellcheck="false" placeholder="Password" aria-label="Password">
+        ${wrong ? '<p class="viewer-error">That password is incorrect. Try again.</p>' : ''}
+        <button type="submit" class="tool-btn primary">Open</button>
+      </form>`;
+    const form = body.querySelector('form');
+    form.querySelector('input').focus();
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const pw = form.querySelector('input').value;
+      showStatus(body, 'Opening…', false, true);
+      resolve(pw);
+    });
+  });
 }
 
 // ---------- PDF ----------
@@ -130,7 +275,7 @@ async function loadPdfJs() {
   return pdfjs;
 }
 
-async function showPdf(file, body, overlay, ready) {
+async function showPdf({ file, body, overlay, ready, alive }) {
   const lib = await loadPdfJs();
   const task = lib.getDocument({
     data: file.bytes.slice(), // PDF.js takes ownership of the buffer
@@ -144,25 +289,12 @@ async function showPdf(file, body, overlay, ready) {
     enableXfa: false,
   });
   // Password-protected PDFs (bank statements): ask in place, retry on a wrong one.
-  task.onPassword = (update, reason) => {
-    const wrong = reason === lib.PasswordResponses.INCORRECT_PASSWORD;
-    body.innerHTML = `<form class="viewer-password">
-        <div class="viewer-lock">${ICON.lock}</div>
-        <p><strong>This PDF is password-protected.</strong><br>Enter its password to open it.</p>
-        <input type="password" autocomplete="off" spellcheck="false" placeholder="Password" aria-label="PDF password">
-        ${wrong ? '<p class="viewer-error">That password is incorrect. Try again.</p>' : ''}
-        <button type="submit" class="tool-btn primary">Open</button>
-      </form>`;
-    const form = body.querySelector('form');
-    form.querySelector('input').focus();
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const pw = form.querySelector('input').value;
-      body.innerHTML = '<div class="viewer-status">Opening…</div>';
-      update(pw);
-    });
+  task.onPassword = async (update, reason) => {
+    const pw = await askPassword(body, { what: 'PDF', wrong: reason === lib.PasswordResponses.INCORRECT_PASSWORD });
+    if (alive()) update(pw);
   };
   const pdf = await task.promise;
+  if (!alive()) return task.destroy();
   const pagesEl = overlay.querySelector('.viewer-pages');
   body.innerHTML = '<div class="pdf-pages"></div>';
   const wrap = body.querySelector('.pdf-pages');
@@ -239,33 +371,65 @@ async function showPdf(file, body, overlay, ready) {
   });
 }
 
-// ---------- Word ----------
+// ---------- Office ----------
 
-let officeLoaded = null;
+const loaded = new Map();
 function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = () => reject(new Error(`Could not load ${src}`));
-    document.head.appendChild(s);
-  });
-}
-function loadOffice() {
-  officeLoaded ??= (async () => {
-    await loadScript(`${VENDOR}office/jszip.min.js`);
-    await loadScript(`${VENDOR}office/docx-preview.min.js`);
-    await loadScript(`${VENDOR}office/read-excel-file.min.js`);
-  })();
-  return officeLoaded;
+  if (!loaded.has(src)) {
+    loaded.set(src, new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = `${VENDOR}${src}`;
+      el.onload = resolve;
+      el.onerror = () => {
+        loaded.delete(src);
+        reject(new Error(`Could not load ${src}`));
+      };
+      document.head.appendChild(el);
+    }));
+  }
+  return loaded.get(src);
 }
 
-async function showDocx(file, body) {
-  await loadOffice();
+// Password-protected Word/Excel files are an encrypted package inside an OLE
+// container; office-crypto (from the author's Minimal Editor) decrypts it
+// with the password. Old .xls files use the same container unencrypted and
+// are returned as they are.
+async function unlockOffice(bytes, body, what, alive) {
+  if (bytes.length < 8 || !(bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0)) return bytes;
+  await loadScript('office/office-crypto.js');
+  let wrong = false;
+  for (;;) {
+    let password = '';
+    try {
+      // Some files are "encrypted" with an empty password; try that first.
+      return await globalThis.OfficeCrypto.decryptOfficeFile(bytes, password);
+    } catch (e) {
+      if (e.code === 'NOT_ENCRYPTED_OOXML' || e.message === 'NOT_CFB') return bytes;
+      if (e.code === 'UNSUPPORTED_ENCRYPTION_VERSION') throw new Error('this file uses an encryption scheme that is not supported');
+      if (e.code !== 'WRONG_PASSWORD') throw e;
+    }
+    for (;;) {
+      password = await askPassword(body, { what, wrong });
+      if (!alive()) return null;
+      try {
+        return await globalThis.OfficeCrypto.decryptOfficeFile(bytes, password);
+      } catch (e) {
+        if (e.code !== 'WRONG_PASSWORD') throw e;
+        wrong = true;
+      }
+    }
+  }
+}
+
+async function showDocx({ file, body, ready, alive }) {
+  const bytes = await unlockOffice(file.bytes, body, 'document', alive);
+  if (!bytes || !alive()) return;
+  await loadScript('office/jszip.min.js');
+  await loadScript('office/docx-preview.min.js');
   // Rendered off-screen, then sanitised and shown in a sandboxed frame.
   const staging = document.createElement('div');
   const styles = document.createElement('div');
-  await window.docx.renderAsync(new Blob([file.bytes]), staging, styles, {
+  await window.docx.renderAsync(new Blob([bytes]), staging, styles, {
     inWrapper: true,
     breakPages: true,
     useBase64URL: true, // images as data: URLs, which the frame allows
@@ -273,39 +437,64 @@ async function showDocx(file, body) {
     renderFooters: true,
     experimental: false,
   });
-  const html = styles.innerHTML + staging.innerHTML;
-  return showHtml(body, file.filename, html, { page: true });
+  if (alive()) ready(showHtml(body, file.filename, styles.innerHTML + staging.innerHTML));
 }
 
-// ---------- Excel / CSV ----------
+// ---------- spreadsheets (SheetJS: .xlsx, .xls, .ods) ----------
 
-async function showXlsx(file, body) {
-  await loadOffice();
-  const blob = new Blob([file.bytes]);
-  // read-excel-file 9: every sheet at once, as [{ sheet, data: rows }].
-  const tables = (await window.readXlsxFile(blob)).map(({ sheet, data }) => ({ name: sheet, rows: data ?? [] }));
-  const tabs = tables.length > 1
-    ? `<nav class="tabs">${tables.map((t, i) => `<a href="#s${i}">${esc(t.name)}</a>`).join('')}</nav>` : '';
-  const html = tabs + tables.map((t, i) =>
-    `<section id="s${i}">${tables.length > 1 ? `<h3>${esc(t.name)}</h3>` : ''}${tableHtml(t.rows)}</section>`).join('');
-  return showHtml(body, file.filename, html);
+async function showSheet({ file, body, ready, alive }) {
+  const bytes = await unlockOffice(file.bytes, body, 'spreadsheet', alive);
+  if (!bytes || !alive()) return;
+  await loadScript('office/xlsx.full.min.js');
+  const wb = window.XLSX.read(bytes, { type: 'array', cellDates: true, cellNF: true });
+  const sheets = wb.SheetNames.map((name) => ({ name, rows: sheetRows(wb.Sheets[name]) }));
+  if (alive()) ready(showHtml(body, file.filename, sheetHtml(sheets)));
 }
 
-const cellText = (v) => {
-  if (v == null) return '';
-  if (v instanceof Date) return isNaN(v) ? '' : v.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  if (typeof v === 'number') return v.toLocaleString(undefined, { maximumFractionDigits: 10 });
-  return String(v);
-};
+// Rows of display strings; dates use the app's format, other cells the text
+// Excel shows (with the sheet's number formats).
+function sheetRows(ws) {
+  const ref = ws?.['!ref'];
+  if (!ref) return [];
+  const XLSX = window.XLSX;
+  const range = XLSX.utils.decode_range(ref);
+  const rows = [];
+  for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 4999); r++) {
+    const row = [];
+    for (let c = range.s.c; c <= Math.min(range.e.c, range.s.c + 199); c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (!cell) row.push({ text: '' });
+      else if (cell.t === 'n' && cell.z && XLSX.SSF.is_date(cell.z)) {
+        // A date stored as a serial number with a date format.
+        const d = XLSX.SSF.parse_date_code(cell.v);
+        const date = new Date(d.y, d.m - 1, d.d, d.H, d.M, d.S);
+        row.push({ text: d.H || d.M ? fmtDateTime(date) : fmtDate(date) });
+      } else if (cell.t === 'd') {
+        const hasTime = cell.v.getHours() || cell.v.getMinutes();
+        row.push({ text: hasTime ? fmtDateTime(cell.v) : fmtDate(cell.v) });
+      } else row.push({ text: cell.w ?? String(cell.v ?? ''), num: cell.t === 'n' });
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function sheetHtml(sheets) {
+  const tabs = sheets.length > 1
+    ? `<nav class="tabs">${sheets.map((t, i) => `<a href="#s${i}">${esc(t.name)}</a>`).join('')}</nav>` : '';
+  return tabs + sheets.map((t, i) =>
+    `<section id="s${i}">${sheets.length > 1 ? `<h3>${esc(t.name)}</h3>` : ''}${tableHtml(t.rows)}</section>`).join('');
+}
 
 function tableHtml(rows) {
   if (!rows.length) return '<p class="empty">This sheet is empty.</p>';
   const width = Math.max(...rows.map((r) => r.length));
   const col = (n) => { let s = ''; n++; while (n) { s = String.fromCharCode(65 + ((n - 1) % 26)) + s; n = Math.floor((n - 1) / 26); } return s; };
+  const cell = (v) => (typeof v === 'object' && v ? v : { text: String(v ?? '') });
   return `<table><thead><tr><th></th>${Array.from({ length: width }, (_, i) => `<th>${col(i)}</th>`).join('')}</tr></thead><tbody>${
     rows.map((r, i) => `<tr><th>${i + 1}</th>${Array.from({ length: width }, (_, j) => {
-      const v = r[j];
-      return `<td${typeof v === 'number' ? ' class="num"' : ''}>${esc(cellText(v))}</td>`;
+      const v = cell(r[j]);
+      return `<td${v.num ? ' class="num"' : ''}>${esc(v.text)}</td>`;
     }).join('')}</tr>`).join('')}</tbody></table>`;
 }
 
