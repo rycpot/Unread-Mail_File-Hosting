@@ -287,7 +287,13 @@ mark anything read.
 
 The two icons above **+** in the left rail upload files and give you links to
 share: **x02** (top) and **Catbox**. Click one and the email area becomes a drop
-zone: drop files anywhere on it, or click it to choose files. Each file gets its
+zone: drop files anywhere on it, or click it to choose files. You can also paste
+(⌘V): right-click an image on any web page → **Copy image**, then paste in the
+panel. The service fetches the original file from its address (keeping its format,
+animation and name); if it can't (a site behind a login or blocking outside
+downloads), the pasted picture is uploaded instead, as PNG. Pasting a copied link
+to a file (e.g. **Copy image address**) uploads that file, and a screenshot copied
+to the clipboard (⌘⌃⇧4) uploads too. x02 only accepts image links. Each file gets its
 own link; when the uploads finish the links are copied to the clipboard (one per
 line). Click any link (or the copy icon) to copy it again, or the arrow to open it.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile

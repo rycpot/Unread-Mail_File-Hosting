@@ -1,4 +1,5 @@
 {
+  "0.11.0": "Uploads: paste with ⌘V in the x02 or Catbox panel. A copied image uploads the original file (or the pasted picture if the site blocks it), a copied link uploads that file, and screenshots work too.",
   "0.10.3": "Uploads: Recent uploads keeps the last 100 per service (was 20); Catbox's Clear list button is gone.",
   "0.10.2": "Uploads: a wider panel with a fixed-width link column, and the copy, open and delete icons lined up in straight columns.",
   "0.10.1": "Uploads: the x02 and Catbox icons sit just above Recently read; Recent uploads shows previews, date and time, and a delete button (x02, and Catbox files uploaded with your userhash); the x02 list comes from your account, including files uploaded on the x02 website.",

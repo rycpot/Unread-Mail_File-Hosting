@@ -34,6 +34,18 @@ export const UPLOADERS = {
       if (expiry) form.append('expiry', expiry);
       return { url: 'https://up.x02.me/api/upload?format=json', headers: { 'x-api-key': s.x02ApiKey.trim() }, form };
     },
+    // The service downloads the file itself (images only, per x02's docs).
+    async fromUrl(url, s, { expiry }) {
+      const res = await fetch('https://up.x02.me/api/upload/url', {
+        method: 'POST',
+        headers: { 'x-api-key': s.x02ApiKey.trim(), 'content-type': 'application/json' },
+        body: JSON.stringify({ imageUrl: url, ...(expiry ? { expiry } : {}) }),
+      });
+      const text = await res.text();
+      const link = this.parse(res.status, text);
+      const data = JSON.parse(text).data ?? {};
+      return { url: link, size: data.sizeBytes ?? 0, name: data.originalFilename };
+    },
     // The account's latest uploads, including ones made on the x02 website.
     async list(s) {
       // Page by page (the server may return fewer per page than asked).
@@ -88,6 +100,14 @@ export const UPLOADERS = {
       if (s.catboxUserhash?.trim()) form.append('userhash', s.catboxUserhash.trim());
       form.append('fileToUpload', file, file.name);
       return { url: 'https://catbox.moe/user/api.php', headers: {}, form };
+    },
+    async fromUrl(url, s) {
+      const form = new FormData();
+      form.append('reqtype', 'urlupload');
+      if (s.catboxUserhash?.trim()) form.append('userhash', s.catboxUserhash.trim());
+      form.append('url', url);
+      const res = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: form });
+      return { url: this.parse(res.status, await res.text()), size: 0 };
     },
     // Catbox can only delete files uploaded with the userhash.
     canDelete: (s, entry) => Boolean(s.catboxUserhash?.trim() && entry.account),
@@ -167,6 +187,27 @@ const ICON = {
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 const extOf = (name) => (/\.([a-z0-9]{1,5})$/i.exec(name ?? '')?.[1] ?? 'file').toUpperCase();
 
+const isWebUrl = (s) => typeof s === 'string' && /^https?:\/\/\S+$/i.test(s);
+
+// A readable name for a file fetched from a web address.
+function nameFromUrl(address) {
+  try {
+    const last = decodeURIComponent(new URL(address).pathname.split('/').pop() || '');
+    if (/\.[a-z0-9]{2,5}$/i.test(last) && last.length <= 120) return last;
+  } catch {}
+  return 'image-from-link';
+}
+
+// Chrome names every pasted picture "image.png"; give it a dated name.
+function renamePasted(f) {
+  if (f.name && f.name !== 'image.png') return f;
+  const now = new Date();
+  // e.g. 30-Sep-2026-5-06PM-42s (seconds keep quick pastes apart)
+  const stamp = `${fmtDateTime(now).replace(/[\s:]+/g, '-')}-${String(now.getSeconds()).padStart(2, '0')}s`;
+  const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '');
+  return new File([f], `pasted-image-${stamp}.${ext}`, { type: f.type || 'image/png' });
+}
+
 // A small preview: the image itself, or a file tile with its extension.
 function thumbHtml(name, src) {
   const tile = `<span class="up-tile">${ICON.file}<b>${esc(extOf(name))}</b></span>`;
@@ -190,15 +231,16 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
 
   function activeRowHtml(r) {
     const tail = r.error ? `<span class="up-error">${esc(r.error)}</span>`
+      : r.progress == null ? `<span class="up-bar busy"><i></i></span><span class="up-pct">${esc(r.status ?? 'Uploading…')}</span>`
       : `<span class="up-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></span><span class="up-pct">${r.progress >= 1 ? 'Finishing…' : `${Math.round(r.progress * 100)}%`}</span>`;
     return `<li class="up-row${r.error ? ' failed' : ''}" data-row="${r.id}">${thumbHtml(r.name, r.preview)}
-      <span class="up-file"><span class="up-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="up-meta">${formatSize(r.size)}</span></span>
+      <span class="up-file"><span class="up-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="up-meta">${r.size ? formatSize(r.size) : esc(r.source ?? '')}</span></span>
       <span class="up-result">${tail}${r.error ? `<button type="button" class="up-icon" data-u="dismiss" data-row="${r.id}" title="Dismiss">${ICON.close}</button>` : ''}</span></li>`;
   }
 
   const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
   function entryRowHtml(e, s) {
-    const meta = [formatSize(e.size), e.at ? fmtDateTime(e.at) : '', e.expiry ? (expired(e) ? 'expired' : `deletes after ${e.expiry}`) : ''].filter(Boolean).join(' · ');
+    const meta = [e.size ? formatSize(e.size) : '', e.at ? fmtDateTime(e.at) : '', e.expiry ? (expired(e) ? 'expired' : `deletes after ${e.expiry}`) : ''].filter(Boolean).join(' · ');
     return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, e.url)}
       <span class="up-file"><span class="up-name" title="${esc(e.name)}">${esc(e.name)}</span><span class="up-meta">${esc(meta)}</span></span>
       <span class="up-result">${rowActions(e, UPLOADERS[service].canDelete(s, e))}</span></li>`;
@@ -256,7 +298,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         </header>
         <div class="up-drop${u.ready(s) ? '' : ' disabled'}" data-u="choose" role="button" tabindex="0">
           ${ICON.upload}
-          <p><strong>Drop files anywhere here</strong><br>or click to choose files</p>
+          <p><strong>Drop files anywhere here</strong><br>or click to choose files, or paste a copied image or link (⌘V)</p>
           <p class="up-rules">${esc(u.rules)}</p>
           <input type="file" multiple hidden>
         </div>
@@ -290,15 +332,52 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     }
   }
 
+  // One upload each: a file, or a web address the service fetches itself
+  // (with, for a pasted image, the pasted picture to fall back on).
+  const fileJob = (f) => ({
+    name: f.name, size: f.size, check: (svc) => refuse(svc, f),
+    preview: IMAGE_EXT.test(f.name) && f.size < 50 * MB ? URL.createObjectURL(f) : null,
+    run: (svc, s, options, onProgress) => uploadFile(svc, f, s, options, onProgress).then((url) => ({ url })),
+  });
+  const urlJob = (address, fallback) => {
+    const name = nameFromUrl(address);
+    return {
+      name,
+      size: 0,
+      source: fallback ? 'Copied image' : 'From a link',
+      check: (svc) => (UPLOADERS[svc].blocked?.test(name) ? `${UPLOADERS[svc].name} doesn't accept this type of file.` : null),
+      preview: fallback ? URL.createObjectURL(fallback) : IMAGE_EXT.test(name) ? address : null,
+      async run(svc, s, options, onProgress, row) {
+        row.progress = null;
+        row.status = 'Fetching the original…';
+        onProgress(null);
+        try {
+          const got = await UPLOADERS[svc].fromUrl(address, s, options);
+          return { url: got.url, size: got.size, name: got.name || name };
+        } catch (e) {
+          if (!fallback) throw e;
+          // The service couldn't fetch it (login, hotlink protection…):
+          // upload the pasted picture instead.
+          row.name = fallback.name;
+          row.size = fallback.size;
+          row.progress = 0;
+          const url = await uploadFile(svc, fallback, s, options, onProgress);
+          return { url, name: fallback.name, size: fallback.size };
+        }
+      },
+    };
+  };
+
+  function uploadAll(files) {
+    return runJobs([...files].map(fileJob));
+  }
+
   let nextId = 1;
-  async function uploadAll(files) {
+  async function runJobs(jobs) {
     const svc = service;
     const s = getSettings();
-    if (!svc || !UPLOADERS[svc].ready(s)) return;
-    const rows = [...files].map((f) => ({
-      id: nextId++, file: f, name: f.name, size: f.size, progress: 0, error: refuse(svc, f),
-      preview: IMAGE_EXT.test(f.name) && f.size < 50 * MB ? URL.createObjectURL(f) : null,
-    }));
+    if (!svc || !UPLOADERS[svc].ready(s) || !jobs.length) return;
+    const rows = jobs.map((j) => ({ id: nextId++, job: j, name: j.name, size: j.size, source: j.source, preview: j.preview, progress: 0, error: j.check(svc) }));
     active[svc].unshift(...rows); // newest drop first, in the order dropped
     await render();
     const options = { expiry: svc === 'x02' ? expiry : '' };
@@ -309,22 +388,24 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       while (next < queue.length) {
         const r = queue[next++];
         let last = 0;
+        const onProgress = (p) => {
+          if (p == null) return renderRow(svc, r);
+          r.progress = p;
+          if (p - last >= 0.02 || p === 1) {
+            last = p;
+            renderRow(svc, r);
+          }
+        };
         try {
-          const url = await uploadFile(svc, r.file, s, options, (p) => {
-            r.progress = p;
-            if (p - last >= 0.02 || p === 1) {
-              last = p;
-              renderRow(svc, r);
-            }
-          });
-          done.push({ order: r.id, url, name: r.name, size: r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc === 'catbox' && s.catboxUserhash?.trim() ? { account: true } : {}) });
+          const got = await r.job.run(svc, s, options, onProgress, r);
+          done.push({ order: r.id, url: got.url, name: got.name ?? r.name, size: got.size ?? r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc === 'catbox' && s.catboxUserhash?.trim() ? { account: true } : {}) });
           active[svc] = active[svc].filter((x) => x !== r); // it moves to the list below
-          fresh.add(url);
+          fresh.add(got.url);
         } catch (e) {
           r.error = e.message;
         }
-        r.file = null;
-        if (r.preview) URL.revokeObjectURL(r.preview);
+        r.job = null;
+        if (r.preview?.startsWith('blob:')) URL.revokeObjectURL(r.preview);
         r.preview = null;
         renderRow(svc, r);
       }
@@ -337,6 +418,35 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     await fetchRemote(svc);
     await render();
   }
+
+  // Cmd+V while the panel is open: a copied image (the original file from its
+  // address when the service can fetch it, else the pasted picture), a
+  // screenshot, or a copied link. Pasting into a text field stays a paste.
+  function onPaste(e) {
+    if (!service || e.target.closest?.('input, textarea, select, [contenteditable="true"], .compose, dialog')) return;
+    const data = e.clipboardData;
+    if (!data) return;
+    e.preventDefault();
+    if (!UPLOADERS[service].ready(getSettings())) {
+      toast(`Add your ${UPLOADERS[service].name} API key in Settings first.`, { error: true });
+      return;
+    }
+    const files = [...data.files].map(renamePasted);
+    const html = data.getData('text/html');
+    const src = html ? new DOMParser().parseFromString(html, 'text/html').querySelector('img')?.getAttribute('src') : null;
+    const text = data.getData('text/plain').trim();
+    const jobs = [];
+    if (files.length === 1 && isWebUrl(src)) jobs.push(urlJob(src, files[0]));
+    else if (files.length) jobs.push(...files.map(fileJob));
+    else if (isWebUrl(src)) jobs.push(urlJob(src));
+    else if (isWebUrl(text)) jobs.push(urlJob(text));
+    if (!jobs.length) {
+      toast('Nothing to upload on the clipboard. Copy an image, a link to a file, or a screenshot first.', { error: true });
+      return;
+    }
+    runJobs(jobs);
+  }
+  document.addEventListener('paste', onPaste);
 
   async function removeEntry(url) {
     const svc = service;

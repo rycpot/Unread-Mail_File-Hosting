@@ -1105,3 +1105,6 @@ label.s-row { cursor: pointer; }
   .up-link { width: 260px; }
 }
 span.up-icon:hover { background: none; }
+/* Uploads fetched from a web address report no progress. */
+.up-bar.busy i { width: 35%; animation: up-busy 1.1s ease-in-out infinite alternate; }
+@keyframes up-busy { from { transform: translateX(-10%); } to { transform: translateX(200%); } }
