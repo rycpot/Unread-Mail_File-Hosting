@@ -71,6 +71,16 @@ export function showMedia({ file, body, kind, sizeText, onUnplayable }) {
   }
 
   const $ = (sel) => root.querySelector(sel);
+  // Swaps a button's icon only when it changes: sync runs several times a
+  // second while playing, and replacing the icon between mouse down and up
+  // would swallow the click.
+  const setIcon = (button, name, title) => {
+    if (button.dataset.icon !== name) {
+      button.innerHTML = ICON[name];
+      button.dataset.icon = name;
+    }
+    button.title = title;
+  };
   const fill = (range) => {
     const max = Number(range.max) || 1;
     range.style.setProperty('--p', `${(Number(range.value) / max) * 100}%`);
@@ -82,26 +92,21 @@ export function showMedia({ file, body, kind, sizeText, onUnplayable }) {
     let dragging = false;
     const sync = () => {
       const playing = !el.paused && !el.ended;
-      root.querySelectorAll('[data-m="play"]').forEach((b) => {
-        b.innerHTML = playing ? ICON.pause : ICON.play;
-        b.title = playing ? 'Pause (Space)' : 'Play (Space)';
-      });
+      root.querySelectorAll('[data-m="play"]').forEach((b) => setIcon(b, playing ? 'pause' : 'play', playing ? 'Pause (Space)' : 'Play (Space)'));
       $('[data-m="now"]').textContent = fmtClock(el.currentTime);
       $('[data-m="total"]').textContent = fmtClock(el.duration);
       seek.max = Number.isFinite(el.duration) ? el.duration : 0;
       if (!dragging) seek.value = el.currentTime;
       fill(seek);
       const quiet = el.muted || el.volume === 0;
-      $('[data-m="mute"]').innerHTML = quiet ? ICON.muted : ICON.volume;
-      $('[data-m="mute"]').title = quiet ? 'Unmute (M)' : 'Mute (M)';
+      setIcon($('[data-m="mute"]'), quiet ? 'muted' : 'volume', quiet ? 'Unmute (M)' : 'Mute (M)');
       vol.value = el.muted ? 0 : el.volume;
       fill(vol);
       $('[data-m="speed"]').textContent = `${el.playbackRate}×`;
       const full = $('[data-m="full"]');
       if (full) {
         const on = document.fullscreenElement === root;
-        full.innerHTML = on ? ICON.exitFull : ICON.full;
-        full.title = on ? 'Exit full screen (F)' : 'Full screen (F)';
+        setIcon(full, on ? 'exitFull' : 'full', on ? 'Exit full screen (F)' : 'Full screen (F)');
       }
     };
     for (const ev of ['play', 'pause', 'ended', 'timeupdate', 'durationchange', 'loadedmetadata', 'volumechange', 'ratechange']) el.addEventListener(ev, sync);
