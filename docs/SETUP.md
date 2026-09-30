@@ -259,6 +259,8 @@ fill the app. **Reply**, **Reply all** and **Forward** are in the reader's toolb
 
 Every attachment opens in the app. PDFs, Word (.docx) and Excel (.xlsx, .xls, .ods)
 files, password-protected ones included, CSV, images and any text file are shown;
+videos (MP4, MOV, WebM, MKV) and audio (MP3, M4A, WAV, FLAC, Ogg, Opus) play there
+(Space play/pause, M mute, F full screen; the 1× button changes speed);
 other files show a Download button (nothing downloads by itself). The arrows (or ←/→)
 move between an email's attachments; Download and Print (⌘P) are at the top right.
 Old .doc files are not previewed.
@@ -266,8 +268,8 @@ Old .doc files are not previewed.
 ## 10. Offline cache
 
 Every email the app lists (unread, Recently read, Sent, Drafts and Spam) is
-downloaded in the background with its images and attachments as soon as it
-appears, so it opens instantly, also without a connection. Downloading does not
+downloaded in the background with its images and attachments (videos over
+50 MB only when you open them) as soon as it appears, so it opens instantly, also without a connection. Downloading does not
 mark anything read.
 
 - It is stored in this Chrome profile on disk (IndexedDB), readable by anyone with
