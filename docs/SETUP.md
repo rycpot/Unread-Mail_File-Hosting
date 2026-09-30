@@ -85,7 +85,7 @@ No client secret is created: the extension uses the PKCE flow.
 ## 3. Enter the IDs
 
 Click the toolbar icon to open the app tab, then the **gear icon → OAuth client IDs**
-(it opens by itself on first run). Paste the Google client ID and the Microsoft
+at the bottom (it opens by itself on first run). Paste the Google client ID and the Microsoft
 Application (client) ID, then click **Save IDs**.
 
 The IDs are saved inside the extension, so updating its files (ZIP or `git pull`)
@@ -213,13 +213,13 @@ mail.proton.me again and click **Sign in** in the app.
 
 ## 7. Notifications
 
-**Settings → Notifications for new mail** and **Notification sound** can be switched
+**Settings → Notifications → New mail notifications** and **Sound** can be switched
 independently; **Test** shows a sample notification and plays the chime.
 
 On macOS, Chrome's notifications also need to be allowed in **System Settings →
 Notifications → Google Chrome**. The banner style you choose there (Temporary or
 Persistent) is asked once after your first account is connected, and can be changed
-under **Settings → Notification banners**; keep the two the same:
+under **Settings → Notifications → Banner style**; keep the two the same:
 
 - **Persistent:** one alert; the same banner then counts new mail silently until you
   close it, after which the next email alerts again straight away.
@@ -244,11 +244,11 @@ fill the app. **Reply**, **Reply all** and **Forward** are in the reader's toolb
   them in its usual font.
 - Drafts save to the account's Drafts folder as you type and when you close the
   window; reopen them from **Drafts** at the bottom of the list.
-- **Send** waits for the undo delay (Settings → Undo send: 5, 10, 20 or 30 s). The
+- **Send** waits for the undo delay (Settings → Writing → Undo send: 5, 10, 20 or 30 s). The
   bar at the bottom counts down in every view, even if the app tab is closed;
   **Undo** reopens the email. If Chrome quits during the countdown the email is
   not sent and stays in Drafts.
-- For iCloud, Yahoo and AOL, set **Settings → Your name** (Gmail, Outlook and
+- For iCloud, Yahoo and AOL, set **Settings → Writing → Your name** (Gmail, Outlook and
   Proton use the name set in each service). They send through the same app
   passwords (SMTP), so the helper needs updating once (the update does it).
 - Proton: emails to Proton addresses are end-to-end encrypted with the recipient's
@@ -286,7 +286,7 @@ mark anything read.
 | "The helper is not installed" | Run the install command from step 0, then reload the extension. |
 | iCloud/Yahoo/AOL "rejected the email or app password" | Use an app-specific password, not your normal one. For iCloud, sign in with the @icloud.com address. |
 | Proton shows "request failed" after a Proton update | Open mail.proton.me once, then **Refresh**; the extension re-reads Proton's current app version. If it persists, report the error text. |
-| No notification appears | Check Settings → Notifications for new mail, then macOS System Settings → Notifications → Google Chrome, and that Focus / Do Not Disturb is off. |
+| No notification appears | Check Settings → Notifications → New mail notifications, then macOS System Settings → Notifications → Google Chrome, and that Focus / Do Not Disturb is off. |
 | "client ID is not set" | Enter the IDs under the gear icon → OAuth client IDs (step 3). |
 | `redirect_uri_mismatch` (Google) | The redirect URI in step 1.6 must match exactly, with the trailing `/`. |
 | "Gmail access was not granted" | On the consent screen, tick the Gmail permission checkbox. |

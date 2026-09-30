@@ -722,6 +722,7 @@ function openAccountMenu(button, id) {
 function closeMenus() {
   document.querySelectorAll('.menu[data-floating]').forEach((m) => m.remove());
   $('settingsMenu').hidden = true;
+  closeHelpTips();
 }
 
 // ---------- actions ----------
@@ -1324,7 +1325,18 @@ $('settingsBtn').addEventListener('click', (e) => {
     showCacheUsage();
   }
 });
-$('settingsMenu').addEventListener('click', (e) => e.stopPropagation());
+$('settingsMenu').addEventListener('click', (e) => {
+  e.stopPropagation();
+  // A ? tip shows on hover; a click keeps it open until the next click.
+  if (e.target.closest('.help-pop')) return;
+  const tip = e.target.closest('.help-tip');
+  const wasOpen = tip?.classList.contains('open');
+  closeHelpTips();
+  if (tip && !wasOpen) tip.classList.add('open');
+});
+function closeHelpTips() {
+  document.querySelectorAll('.help-tip.open').forEach((t) => t.classList.remove('open'));
+}
 $('pollMinutes').addEventListener('change', (e) => saveSettings({ pollMinutes: Number(e.target.value) }));
 $('markReadOnOpen').addEventListener('change', (e) => saveSettings({ markReadOnOpen: e.target.checked }));
 $('loadRemoteImages').addEventListener('change', (e) => saveSettings({ loadRemoteImages: e.target.checked }));
@@ -1354,7 +1366,10 @@ $('clearCache').addEventListener('click', async () => {
 async function showCacheUsage() {
   const s = await cacheDb.stats();
   const mb = s.total / 1048576;
-  $('cacheUsage').textContent = `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · ${s.bodies?.count ?? 0} emails, ${s.attachments?.count ?? 0} attachments`;
+  const size = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : mb > 0 && mb < 0.1 ? '<0.1 MB' : `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  const emails = s.bodies?.count ?? 0;
+  const files = s.attachments?.count ?? 0;
+  $('cacheUsage').textContent = `${size} used · ${emails} ${emails === 1 ? 'email' : 'emails'}, ${files} ${files === 1 ? 'file' : 'files'}`;
 }
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
 document.addEventListener('keydown', (e) => {
@@ -1611,4 +1626,8 @@ addEventListener('hashchange', openFromHash);
 openFromHash();
 // First run: open Settings so the client IDs can be entered.
 const ids = await getClientIds();
-if (!ids.google && !ids.microsoft) $('settingsMenu').hidden = false;
+if (!ids.google && !ids.microsoft) {
+  $('clientIdsDetails').open = true;
+  $('settingsMenu').hidden = false;
+  showCacheUsage();
+}

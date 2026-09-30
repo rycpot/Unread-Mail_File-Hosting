@@ -22,78 +22,90 @@
       <div class="menu-wrap">
         <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true"></button>
         <div class="menu settings" id="settingsMenu" hidden>
-          <label class="row">
-            <span>Check every</span>
-            <select id="pollMinutes">
-              <option value="0.5">30 seconds</option>
-              <option value="1">1 minute</option>
-              <option value="2">2 minutes</option>
-              <option value="5">5 minutes</option>
-              <option value="10">10 minutes</option>
-              <option value="15">15 minutes</option>
-            </select>
-          </label>
-          <p class="settings-note">Gmail, Outlook and Proton are checked at this interval. iCloud, Yahoo and AOL
-            update instantly (push) while the IMAP helper is connected.</p>
-          <label class="row check"><input type="checkbox" id="notifyEnabled"> Notifications for new mail</label>
-          <label class="row">
-            <span>Notification banners</span>
-            <select id="bannerStyle">
-              <option value="temporary">Temporary</option>
-              <option value="persistent">Persistent</option>
-            </select>
-          </label>
-          <p class="settings-note">Match macOS System Settings → Notifications → Google Chrome. Persistent: one alert,
-            then the banner keeps counting until you close it. Temporary: a new banner for mail after it has gone.</p>
-          <div class="row check sound-row">
-            <label class="check-label"><input type="checkbox" id="soundEnabled"> Notification sound</label>
-            <button type="button" class="link-btn" id="testNotify">Test</button>
-          </div>
-          <label class="row">
-            <span>Undo send</span>
-            <select id="undoSendSeconds">
-              <option value="5">5 seconds</option>
-              <option value="10">10 seconds</option>
-              <option value="20">20 seconds</option>
-              <option value="30">30 seconds</option>
-            </select>
-          </label>
-          <label class="row">
-            <span>Your name</span>
-            <input type="text" id="senderName" placeholder="Shown to recipients" autocomplete="name" spellcheck="false">
-          </label>
-          <p class="settings-note">Your name is used for iCloud, Yahoo and AOL. Gmail, Outlook and Proton use the name set
-            in each service.</p>
-          <label class="row">
-            <span>Offline cache</span>
-            <select id="cacheLimitMB">
-              <option value="500">Up to 500 MB</option>
-              <option value="1024">Up to 1 GB</option>
-              <option value="2048">Up to 2 GB</option>
-              <option value="0">No limit</option>
-            </select>
-          </label>
-          <p class="settings-note"><span id="cacheUsage"></span> ·
-            <button type="button" class="link-btn" id="clearCache">Clear</button><br>Every email in the app, with its
-            attachments, is downloaded in the background and kept on this computer so it opens instantly.</p>
-          <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
-          <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
-          <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>
-          <div class="row version-row">
+          <section class="s-group">
+            <h3>Checking</h3>
+            <div class="s-row">
+              <span class="s-label"><label for="pollMinutes">Check every</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Gmail, Outlook and Proton are checked at this interval. iCloud, Yahoo and AOL update instantly (push) while the IMAP helper is connected.</span></button></span>
+              <select id="pollMinutes">
+                <option value="0.5">30 seconds</option>
+                <option value="1">1 minute</option>
+                <option value="2">2 minutes</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+              </select>
+            </div>
+          </section>
+          <section class="s-group">
+            <h3>Notifications</h3>
+            <label class="s-row"><span>New mail notifications</span><input type="checkbox" class="switch" id="notifyEnabled"></label>
+            <div class="s-row">
+              <span class="s-label"><label for="soundEnabled">Sound</label><button type="button" class="link-btn" id="testNotify">Test</button></span>
+              <input type="checkbox" class="switch" id="soundEnabled">
+            </div>
+            <div class="s-row">
+              <span class="s-label"><label for="bannerStyle">Banner style</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Match macOS System Settings → Notifications → Google Chrome.<br><b>Persistent:</b> one alert, then the banner keeps counting until you close it.<br><b>Temporary:</b> a new banner for mail after it has gone.</span></button></span>
+              <select id="bannerStyle">
+                <option value="temporary">Temporary</option>
+                <option value="persistent">Persistent</option>
+              </select>
+            </div>
+          </section>
+          <section class="s-group">
+            <h3>Reading</h3>
+            <label class="s-row"><span>Mark as read when opened</span><input type="checkbox" class="switch" id="markReadOnOpen"></label>
+            <label class="s-row"><span>Always load remote images</span><input type="checkbox" class="switch" id="loadRemoteImages"></label>
+            <label class="s-row"><span>Show hidden accounts</span><input type="checkbox" class="switch" id="showHidden"></label>
+          </section>
+          <section class="s-group">
+            <h3>Writing</h3>
+            <div class="s-row">
+              <span class="s-label"><label for="senderName">Your name</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Used for iCloud, Yahoo and AOL. Gmail, Outlook and Proton use the name set in each service.</span></button></span>
+              <input type="text" id="senderName" placeholder="Shown to recipients" autocomplete="name" spellcheck="false">
+            </div>
+            <div class="s-row">
+              <label for="undoSendSeconds">Undo send</label>
+              <select id="undoSendSeconds">
+                <option value="5">5 seconds</option>
+                <option value="10">10 seconds</option>
+                <option value="20">20 seconds</option>
+                <option value="30">30 seconds</option>
+              </select>
+            </div>
+          </section>
+          <section class="s-group">
+            <h3>Offline cache</h3>
+            <div class="s-row">
+              <span class="s-label"><label for="cacheLimitMB">Limit</label><button type="button" class="help-tip" aria-label="Help">?<span class="help-pop" role="tooltip">Every email in the app, with its attachments, is downloaded in the background and kept on this computer so it opens instantly. When full, the least recently opened go first.</span></button></span>
+              <select id="cacheLimitMB">
+                <option value="500">Up to 500 MB</option>
+                <option value="1024">Up to 1 GB</option>
+                <option value="2048">Up to 2 GB</option>
+                <option value="0">No limit</option>
+              </select>
+            </div>
+            <div class="s-row">
+              <span class="s-sub" id="cacheUsage">…</span>
+              <button type="button" class="link-btn" id="clearCache">Clear</button>
+            </div>
+          </section>
+          <div class="s-foot">
             <span id="versionText"></span>
             <button type="button" class="link-btn" id="checkUpdate">Check for updates</button>
           </div>
-          <form class="client-ids" id="clientIdsForm">
-            <div class="section-title">OAuth client IDs</div>
-            <label>Google client ID
-              <input type="text" id="googleClientId" spellcheck="false" autocomplete="off" placeholder="…apps.googleusercontent.com">
-            </label>
-            <label>Microsoft application (client) ID
-              <input type="text" id="microsoftClientId" spellcheck="false" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
-            </label>
-            <div class="redirect">Redirect URI for both: <code id="redirectUri"></code></div>
-            <button type="submit" class="tool-btn small">Save IDs</button>
-          </form>
+          <details class="s-advanced" id="clientIdsDetails">
+            <summary>OAuth client IDs</summary>
+            <form class="client-ids" id="clientIdsForm">
+              <label>Google client ID
+                <input type="text" id="googleClientId" spellcheck="false" autocomplete="off" placeholder="…apps.googleusercontent.com">
+              </label>
+              <label>Microsoft application (client) ID
+                <input type="text" id="microsoftClientId" spellcheck="false" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000">
+              </label>
+              <div class="redirect">Redirect URI for both: <code id="redirectUri"></code></div>
+              <button type="submit" class="tool-btn small">Save IDs</button>
+            </form>
+          </details>
         </div>
       </div>
     </div>
