@@ -42,6 +42,21 @@ function imapProvider({ id, name, webUrl, passwordHelp }) {
       return { ...m, webUrl };
     },
 
+    // Several emails / attachments per helper session, for the offline cache.
+    async getMessages(account, ids, { folder } = {}) {
+      const res = await call(account, 'getMessages', { ids, folder });
+      return res.messages.map((m) => ({ ...m, webUrl }));
+    },
+
+    async getAttachments(account, messageId, attachments, { folder } = {}) {
+      const res = await call(account, 'getAttachments', {
+        id: messageId,
+        folder,
+        parts: attachments.map((a) => ({ attachmentId: a.id, section: a.section, size: a.size })),
+      });
+      return Object.fromEntries(Object.entries(res.attachments).map(([k, v]) => [k, base64ToBytes(v)]));
+    },
+
     async getAttachment(account, messageId, attachment, { folder } = {}) {
       if (attachment.data) return base64ToBytes(attachment.data);
       // section + size let the helper fetch just this part (see the helper).

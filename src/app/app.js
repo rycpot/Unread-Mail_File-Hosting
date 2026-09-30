@@ -5,7 +5,7 @@ import {
   getClientIds, saveClientIds, saveSettings, setAccountHidden, upsertAccount,
 } from '../storage.js';
 import { refreshAccount } from '../sync.js';
-import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
+import { buildEmailDocument } from './render-email.js';
 import { callHelper } from '../native.js';
 import { compareVersions, currentVersion } from '../update.js';
 import { openViewer } from './viewer.js';
@@ -14,6 +14,8 @@ import { rememberAddresses } from './contacts.js';
 import { uiIcons } from './ui-icons.js';
 import { inlineParts } from './inline-images.js';
 import { fmtDate, fmtDateTime, fmtTime } from './format.js';
+import * as cacheDb from '../cache-db.js';
+import { fetchAttachment, fetchFullMessage } from '../message-fetch.js';
 
 // ---------- icons ----------
 
@@ -151,6 +153,7 @@ function renderTopbar() {
   $('soundEnabled').checked = state.settings.soundEnabled;
   $('bannerStyle').value = state.settings.bannerStyle;
   $('undoSendSeconds').value = String(state.settings.undoSendSeconds ?? 10);
+  $('cacheLimitMB').value = String(state.settings.cacheLimitMB ?? 1024);
   if (document.activeElement !== $('senderName')) $('senderName').value = state.settings.senderName ?? '';
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
@@ -444,7 +447,7 @@ function sectionRows(kind, key) {
     const acct = state.accounts[msg.accountId];
     return `<li class="msg-row recent${msg.read === false ? '' : ' read'}${isSelected(msg.accountId, msg.id, folder) ? ' selected' : ''}">
       <span class="lead">${combined ? pico(acct?.provider) : ''}</span>
-      <button class="msg" data-action="${kind === 'drafts' ? 'open-draft' : 'open'}" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}" data-list="${esc(key)}"${folder ? ` data-folder="${folder}"` : ''}>
+      <button class="msg" data-action="${kind === 'drafts' ? 'open-draft' : 'open'}" data-account="${esc(msg.accountId)}" data-message="${esc(msg.id)}" data-list="${esc(key)}"${folder ? ` data-folder="${folder}"` : ''}${kind === 'drafts' ? ` data-version="${esc(cacheDb.draftVersion(msg))}"` : ''}>
         <span class="msg-from">${toLine ? `${kind === 'drafts' ? '<span class="draft-tag">Draft</span>' : ''}${esc(msg.to?.length ? `To: ${msg.to.map(displayName).join(', ')}` : '(no recipients)')}` : esc(displayName(msg.from))}</span><span class="msg-time">${shortTime(msg.date)}</span>
         <span class="msg-subject">${esc(msg.subject || '(no subject)')}</span>
         ${combined ? `<span class="msg-acct">${esc(acct?.email ?? '')}</span>` : ''}
@@ -892,10 +895,7 @@ async function setRead(id, messageId, read, folder) {
   const a = state.accounts[id];
   await providers[a.provider].setRead(a, messageId, read, { folder });
   const cached = bodies.get(bodyKey(id, messageId, folder));
-  if (cached) {
-    cached.isRead = read;
-    saveBodies();
-  }
+  if (cached) cached.isRead = read;
   if (folder === 'spam') {
     const items = sectionItems('spam', id, messageId);
     if (items.length && items[0].read !== read) await adjustSpamUnread(id, read ? -1 : 1);
@@ -991,105 +991,63 @@ let openSeq = 0;
 // list: the section key when opened from "Recently read" / "Spam".
 // ---------- email body cache ----------
 //
-// The last BODY_LIMIT emails opened or previewed (hovered), including
-// decrypted Proton emails, so opening them again is instant. Kept in memory
-// and in chrome.storage.session (memory only, cleared when Chrome quits),
-// never on disk. Hovering an email for a moment fetches its body ahead of the
-// click; fetching never marks an email read.
+// Emails come from the offline cache (IndexedDB, filled in the background by
+// src/prefetch.js) when they are there, else from the server (then cached).
+// The last few opened are also kept in memory. Hovering an email fetches it
+// ahead of the click; nothing is marked read by fetching.
 
-const BODY_LIMIT = 30;
-const BODY_BYTES = 6e6; // total, within chrome.storage.session's 10 MB
-const ENTRY_BYTES = 1.5e6; // larger emails are cached without inline images
-const bodies = new Map(); // "<accountId>|<folder>|<messageId>" -> message, oldest first
-const bodySizes = new Map();
-const bodyLoads = new Map(); // same key -> promise of a fetch in progress
-const bodyKey = (id, messageId, folder) => `${id}|${folder ?? 'inbox'}|${messageId}`;
+const MEMORY_LIMIT = 30;
+const bodies = new Map(); // cache key -> message, oldest first
+const bodyLoads = new Map(); // same key -> fetch in progress
+const bodyKey = (id, messageId, folder) => cacheDb.bodyKey(id, folder, messageId);
 
 function rememberBody(key, msg) {
   bodies.delete(key);
   bodies.set(key, msg);
-  bodySizes.set(key, JSON.stringify(serializeBody(msg)).length);
-  let total = [...bodySizes.values()].reduce((n, x) => n + x, 0);
-  for (const old of bodies.keys()) {
-    if (bodies.size <= BODY_LIMIT && total <= BODY_BYTES) break;
-    total -= bodySizes.get(old) ?? 0;
-    bodies.delete(old);
-    bodySizes.delete(old);
-  }
-  saveBodies();
+  while (bodies.size > MEMORY_LIMIT) bodies.delete(bodies.keys().next().value);
 }
 
 function forgetBody(id, messageId, folder) {
   const key = bodyKey(id, messageId, folder);
   bodies.delete(key);
-  bodySizes.delete(key);
-  saveBodies();
+  cacheDb.remove('bodies', key);
 }
 
 function forgetAccountBodies(id) {
-  for (const key of [...bodies.keys()]) {
-    if (!key.startsWith(`${id}|`)) continue;
-    bodies.delete(key);
-    bodySizes.delete(key);
-  }
-  saveBodies();
+  for (const key of [...bodies.keys()]) if (key.startsWith(`${id}|`)) bodies.delete(key);
+  cacheDb.forgetAccount(id);
 }
 
-function serializeBody(msg) {
-  const images = [...(msg.inlineImages ?? [])];
-  const withImages = { ...msg, inlineImages: images };
-  return JSON.stringify(withImages).length <= ENTRY_BYTES ? withImages : { ...msg, inlineImages: [], imagesDropped: true };
-}
-
-let bodyTimer;
-function saveBodies() {
-  clearTimeout(bodyTimer);
-  bodyTimer = setTimeout(() => {
-    const entries = [...bodies].map(([k, m]) => [k, serializeBody(m)]);
-    chrome.storage.session.set({ bodyCache: entries }).catch(() => {});
-  }, 500);
-}
-
-async function restoreBodies() {
-  try {
-    const { bodyCache } = await chrome.storage.session.get('bodyCache');
-    for (const [k, m] of bodyCache ?? []) {
-      bodies.set(k, { ...m, inlineImages: new Map(m.inlineImages ?? []) });
-      bodySizes.set(k, JSON.stringify(m).length);
-    }
-  } catch {
-    // no cache
-  }
-}
-
-// The full email, from the cache, a fetch already running, or the server.
 function fetchBody(id, messageId, folder) {
   const key = bodyKey(id, messageId, folder);
-  const cached = bodies.get(key);
-  if (cached) {
-    if (cached.imagesDropped) {
-      // Inline images were too large to keep: fetch them again.
-      const a = state.accounts[id];
-      return loadInlineImages(providers[a.provider], a, cached).then((inlineImages) => ({ ...cached, inlineImages, imagesDropped: false }));
-    }
-    rememberBody(key, cached); // most recently used
-    return Promise.resolve(cached);
+  if (bodies.has(key)) {
+    const msg = bodies.get(key);
+    rememberBody(key, msg);
+    return Promise.resolve(msg);
   }
   if (bodyLoads.has(key)) return bodyLoads.get(key);
-  const a = state.accounts[id];
-  const provider = providers[a.provider];
-  const load = (async () => {
-    const msg = await provider.getMessage(a, messageId, { folder });
-    msg.accountId = id;
-    msg.folder = folder;
-    msg.inlineImages = await loadInlineImages(provider, a, msg);
-    // A Proton email that could not be decrypted is not kept, so the next
-    // open tries again.
-    if (!msg.encrypted && state.accounts[id]) rememberBody(key, msg);
-    return msg;
-  })().finally(() => bodyLoads.delete(key));
+  const load = fetchFullMessage(state.accounts[id], messageId, folder)
+    .then((msg) => {
+      if (!msg.encrypted && state.accounts[id]) rememberBody(key, msg);
+      return msg;
+    })
+    .finally(() => bodyLoads.delete(key));
   bodyLoads.set(key, load);
   return load;
+}
+
+// Read or unread as the lists show it now (a cached copy may be older).
+function listedReadState(id, messageId, folder) {
+  if (!folder) {
+    const row = state.mail[id]?.messages?.find((m) => m.id === messageId);
+    if (row) return Boolean(row.read);
+  }
+  for (const kind of KINDS) {
+    if (SECTION[kind].folder !== folder) continue;
+    const item = sectionItems(kind, id, messageId)[0];
+    if (item && item.read !== undefined) return item.read !== false;
+  }
+  return undefined;
 }
 
 let hoverTimer;
@@ -1112,6 +1070,8 @@ async function openMessage(id, messageId, { folder, list } = {}) {
   try {
     const msg = await fetchBody(id, messageId, folder);
     if (seq !== openSeq) return;
+    const listed = listedReadState(id, messageId, folder);
+    if (listed !== undefined) msg.isRead = listed;
     state.message = msg;
     rememberAddresses([msg.from, ...(msg.to ?? []), ...(msg.cc ?? [])], 1);
     renderReader();
@@ -1128,29 +1088,6 @@ async function openMessage(id, messageId, { folder, list } = {}) {
   }
 }
 
-async function loadInlineImages(provider, account, msg) {
-  const map = new Map();
-  // Emails with embedded images (by cid:, or linked as Gmail drafts do).
-  if (!msg.html || !msg.attachments.some((x) => x.inline || x.contentId)) return map;
-  const inline = msg.attachments.filter((x) => x.inline || x.contentId);
-  await Promise.all(
-    inline.map(async (att) => {
-      try {
-        let cid = att.contentId;
-        let bytes;
-        if (provider.resolveInline) ({ contentId: cid, bytes } = await provider.resolveInline(account, msg.id, att));
-        else bytes = await provider.getAttachment(account, msg.id, att, { folder: msg.folder });
-        if (cid) {
-          att.contentId = cid; // Outlook only tells it here
-          map.set(cid, bytesToDataUrl(bytes, att.mimeType));
-        }
-      } catch (e) {
-        console.warn('inline image failed', e);
-      }
-    }),
-  );
-  return map;
-}
 
 function renderReader() {
   const msg = state.message;
@@ -1212,19 +1149,16 @@ function renderReaderToolbar() {
     ${btn('close-reader', icon.close, 'Close (Esc)', ' close-reader')}`;
 }
 
-// Attachment bytes, kept for the tab's lifetime (last 40), so reopening or
-// moving between attachments is instant.
-const attachmentCache = new Map();
-async function attachmentBytes(msg, att) {
-  const key = `${msg.accountId}|${msg.folder ?? ''}|${msg.id}|${att.id ?? att.filename}|${att.filename}`;
-  if (!attachmentCache.has(key)) {
-    const a = state.accounts[msg.accountId];
-    const p = providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
-    attachmentCache.set(key, p);
-    p.catch(() => attachmentCache.delete(key));
-    while (attachmentCache.size > 40) attachmentCache.delete(attachmentCache.keys().next().value);
+// Attachment bytes from the offline cache (downloaded in the background),
+// else from the server; concurrent requests share one download.
+const attachmentLoads = new Map();
+function attachmentBytes(msg, att) {
+  const key = cacheDb.attachmentKey(msg.accountId, msg.folder, msg.id, att);
+  if (!attachmentLoads.has(key)) {
+    const p = fetchAttachment(state.accounts[msg.accountId], msg, att).finally(() => attachmentLoads.delete(key));
+    attachmentLoads.set(key, p);
   }
-  return attachmentCache.get(key);
+  return attachmentLoads.get(key);
 }
 
 function saveBytes(bytes, att) {
@@ -1318,7 +1252,7 @@ document.addEventListener('click', async (e) => {
     case 'open':
       return openMessage(id, messageId, { folder: el.dataset.folder, list: el.dataset.list });
     case 'open-draft':
-      return openCompose({ mode: 'draft', accountId: id, draftRef: messageId });
+      return openCompose({ mode: 'draft', accountId: id, draftRef: messageId, version: el.dataset.version });
     case 'compose':
       return openCompose({ mode: 'new' });
     case 'reply':
@@ -1385,7 +1319,10 @@ $('settingsBtn').addEventListener('click', (e) => {
   const open = menu.hidden;
   closeMenus();
   menu.hidden = !open;
-  if (open) fillClientIds();
+  if (open) {
+    fillClientIds();
+    showCacheUsage();
+  }
 });
 $('settingsMenu').addEventListener('click', (e) => e.stopPropagation());
 $('pollMinutes').addEventListener('change', (e) => saveSettings({ pollMinutes: Number(e.target.value) }));
@@ -1401,6 +1338,24 @@ $('testNotify').addEventListener('click', async () => {
 });
 $('showHidden').addEventListener('change', (e) => saveSettings({ showHidden: e.target.checked }));
 $('undoSendSeconds').addEventListener('change', (e) => saveSettings({ undoSendSeconds: Number(e.target.value) }));
+$('cacheLimitMB').addEventListener('change', async (e) => {
+  await saveSettings({ cacheLimitMB: Number(e.target.value) });
+  const mb = Number(e.target.value);
+  if (mb) await cacheDb.trim(mb * 1024 * 1024);
+  showCacheUsage();
+});
+$('clearCache').addEventListener('click', async () => {
+  if (!confirm('Delete all downloaded emails and attachments from this computer? They download again in the background.')) return;
+  await cacheDb.clearAll();
+  showCacheUsage();
+  toast('Offline cache cleared');
+  chrome.runtime.sendMessage({ cmd: 'prefetchNow' });
+});
+async function showCacheUsage() {
+  const s = await cacheDb.stats();
+  const mb = s.total / 1048576;
+  $('cacheUsage').textContent = `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · ${s.bodies?.count ?? 0} emails, ${s.attachments?.count ?? 0} attachments`;
+}
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
@@ -1437,7 +1392,6 @@ setInterval(renderTopbar, 30000);
 
 state.view = loadView();
 await restoreSectionCache();
-await restoreBodies();
 await load();
 // Seed address suggestions with the senders of listed mail (lightly weighted).
 rememberAddresses(Object.values(state.mail).flatMap((m) => (m?.messages ?? []).map((x) => x.from)), 0.2);

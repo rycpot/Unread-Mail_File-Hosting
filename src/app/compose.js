@@ -20,6 +20,7 @@ import { rememberAddresses, suggest } from './contacts.js';
 import { uiIcons } from './ui-icons.js';
 import { inlineParts, linkInlineImages } from './inline-images.js';
 import { fmtDateTime } from './format.js';
+import * as cacheDb from '../cache-db.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -94,7 +95,7 @@ export async function openCompose(opts) {
   resolveSenderName(state);
 
   try {
-    if (opts.mode === 'draft') await loadDraft(state, opts.draftRef);
+    if (opts.mode === 'draft') await loadDraft(state, opts.draftRef, opts.version);
     else if (opts.original) await prefill(state, opts.mode, opts.original);
   } catch (e) {
     env.toast(`Couldn't open the draft: ${e.message}`, { error: true });
@@ -191,10 +192,17 @@ function sanitizeForEditor(html, state, message) {
   return doc.innerHTML;
 }
 
-async function loadDraft(state, ref) {
+// version (from the Drafts list) lets a draft downloaded in the background
+// open at once; a draft saved since then is fetched again.
+async function loadDraft(state, ref, version) {
   const account = env.accounts()[state.accountId];
   setStatus(state, 'Opening draft…');
-  const d = await providers[account.provider].loadDraft(account, ref);
+  const key = cacheDb.draftKey(account.id, ref);
+  let d = version ? await cacheDb.getDraft(key, version) : null;
+  if (!d) {
+    d = await providers[account.provider].loadDraft(account, ref);
+    if (version) cacheDb.putDraft(key, account.id, version, d).catch(() => {});
+  }
   state.ref = ref;
   state.mode = 'draft';
   state.messageId = d.messageId ?? d.internetMessageId ?? null;

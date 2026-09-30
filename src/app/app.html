@@ -64,6 +64,18 @@
           </label>
           <p class="settings-note">Your name is used for iCloud, Yahoo and AOL. Gmail, Outlook and Proton use the name set
             in each service.</p>
+          <label class="row">
+            <span>Offline cache</span>
+            <select id="cacheLimitMB">
+              <option value="500">Up to 500 MB</option>
+              <option value="1024">Up to 1 GB</option>
+              <option value="2048">Up to 2 GB</option>
+              <option value="0">No limit</option>
+            </select>
+          </label>
+          <p class="settings-note"><span id="cacheUsage"></span> ·
+            <button type="button" class="link-btn" id="clearCache">Clear</button><br>Every email in the app, with its
+            attachments, is downloaded in the background and kept on this computer so it opens instantly.</p>
           <label class="row check"><input type="checkbox" id="markReadOnOpen"> Mark as read when opened</label>
           <label class="row check"><input type="checkbox" id="loadRemoteImages"> Always load remote images</label>
           <label class="row check"><input type="checkbox" id="showHidden"> Show hidden accounts</label>

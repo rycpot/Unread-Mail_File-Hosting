@@ -38,7 +38,7 @@ import time
 import urllib.request
 import zipfile
 
-VERSION = 6
+VERSION = 7
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -410,6 +410,57 @@ def cmd_get_message(req):
         meta, raw = fetch_raw(conn, uid)
     finally:
         _logout(conn)
+    return message_json(req['id'], meta, raw)
+
+
+def cmd_get_messages(req):
+    """Several emails of one folder in one session (for the offline cache).
+    Emails that no longer exist are left out."""
+    ids = list(req.get('ids') or [])[:25]
+    out = []
+    conn = connect(req['provider'], req['email'])
+    try:
+        uidvalidity = open_folder(conn, req, readonly=True)
+        for mid in ids:
+            try:
+                (uid,) = parse_ids([mid], uidvalidity)
+                meta, raw = fetch_raw(conn, uid)
+                out.append(message_json(mid, meta, raw))
+            except HelperError:
+                continue
+    finally:
+        _logout(conn)
+    return {'messages': out}
+
+
+def cmd_get_attachments(req):
+    """Several attachments of one email in one session; parts:
+    [{ attachmentId, section, size }]. Returns { attachmentId: base64 }."""
+    conn = connect(req['provider'], req['email'])
+    out = {}
+    try:
+        uidvalidity = open_folder(conn, req, readonly=True)
+        (uid,) = parse_ids([req['id']], uidvalidity)
+        whole = None
+        for p in req.get('parts') or []:
+            payload = None
+            section = p.get('section')
+            if section and re.fullmatch(r'\d+(\.\d+)*', str(section)):
+                payload = _fetch_section(conn, uid, section)
+                if payload is not None and p.get('size') is not None and len(payload) != int(p['size']):
+                    payload = None
+            if payload is None:
+                if whole is None:
+                    whole = leaf_parts(email.message_from_bytes(fetch_raw(conn, uid)[1], policy=email.policy.default))
+                index = int(p['attachmentId'])
+                payload = (whole[index].get_payload(decode=True) or b'') if index < len(whole) else b''
+            out[str(p['attachmentId'])] = base64.b64encode(payload).decode('ascii')
+    finally:
+        _logout(conn)
+    return {'attachments': out}
+
+
+def message_json(mid, meta, raw):
     msg = email.message_from_bytes(raw, policy=email.policy.default)
     html_part = msg.get_body(preferencelist=('html',))
     text_part = msg.get_body(preferencelist=('plain',))
@@ -451,7 +502,7 @@ def cmd_get_message(req):
             return (part.get_payload(decode=True) or b'').decode('utf-8', 'replace')
 
     return {
-        'id': req['id'],
+        'id': mid,
         'subject': decode_header(msg.get('Subject')),
         'from': address(str(msg.get('From', ''))),
         'to': addresses(msg.get_all('To')),
@@ -1081,6 +1132,8 @@ COMMANDS = {
     'summary': cmd_summary,
     'recentRead': cmd_recent_read,
     'getMessage': cmd_get_message,
+    'getMessages': cmd_get_messages,
+    'getAttachments': cmd_get_attachments,
     'getAttachment': cmd_get_attachment,
     'setRead': cmd_set_read,
     'markAllRead': cmd_mark_all_read,

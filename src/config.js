@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS = {
   bannerStyle: 'temporary',
   undoSendSeconds: 10,
   senderName: '',
+  // Offline cache of bodies and attachments (MB; 0 = no limit).
+  cacheLimitMB: 1024,
 };
 
 // How many unread messages to keep per account in the sidebar.

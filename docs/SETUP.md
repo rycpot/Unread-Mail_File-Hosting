@@ -148,8 +148,9 @@ These accounts use IMAP through a small local helper
 (`helper/unread_mail_imap.py`, Python standard library only). Chrome starts it
 on demand; it is not a server and does not run when Chrome is closed. It only
 ever reads unread mail (headers of the newest 30), a body when you open an
-email, and the last 10 read emails when you open *Recently read*. Nothing is
-cached on disk.
+email, and the last 10 read emails when you open *Recently read*. Listed emails
+and their attachments are downloaded for the offline cache (see §10); the helper
+itself keeps nothing on disk.
 
 **Push:** while Chrome is running, the helper also keeps one connection per
 account open in IMAP IDLE mode, so new mail (or mail read elsewhere) shows up
@@ -197,9 +198,12 @@ itself, the same way Proton's web app does, without opening any Proton tab:
   session entry. It is still encrypted; only the Proton server can unlock it, and
   only for your signed-in session. So **open mail.proton.me once** after connecting
   (and again if you sign out and in), with **Keep me signed in** on.
-- When you open an email, the extension unlocks your Proton keys in the app tab's
-  memory (never saved to disk; gone when the tab closes) and decrypts the body,
-  embedded images and attachments.
+- The extension unlocks your Proton keys in memory (the app tab and Chrome's
+  background worker for the extension; the keys are never saved to disk) and
+  decrypts the body, embedded images and attachments.
+- Decrypted emails and attachments are kept in the offline cache on this computer,
+  like other accounts' mail (see §10). Clear it with **Settings → Offline cache →
+  Clear**.
 
 Because the extension handles your Proton keys, only run code you trust (this
 repository), and remove the account with **⋯ → Remove account** if you stop using it.
@@ -258,6 +262,22 @@ files, password-protected ones included, CSV, images and any text file are shown
 other files show a Download button (nothing downloads by itself). The arrows (or ←/→)
 move between an email's attachments; Download and Print (⌘P) are at the top right.
 Old .doc files are not previewed.
+
+## 10. Offline cache
+
+Every email the app lists (unread, Recently read, Sent, Drafts and Spam) is
+downloaded in the background with its images and attachments as soon as it
+appears, so it opens instantly, also without a connection. Downloading does not
+mark anything read.
+
+- It is stored in this Chrome profile on disk (IndexedDB), readable by anyone with
+  access to your Mac account, like Chrome's own cache. Proton emails are stored
+  decrypted.
+- **Settings → Offline cache** shows its size and sets the limit (1 GB by default);
+  when full, the least recently opened items go first. **Clear** empties it (it is
+  then downloaded again).
+- Emails no longer listed for 14 days are removed, and removing an account removes
+  its cached mail.
 
 ## Troubleshooting
 

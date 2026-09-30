@@ -7,6 +7,8 @@ import { getAccounts, getSettings } from './storage.js';
 import { notificationClosed, queueNewMail, testNotification } from './notify.js';
 import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
 import { checkForUpdate } from './update.js';
+import { schedulePrefetch, sectionsChanged } from './prefetch.js';
+import * as cache from './cache-db.js';
 
 onNewMail(queueNewMail);
 
@@ -181,6 +183,8 @@ async function commitSend(id) {
   if (status === 'sent') {
     const account = (await getAccounts())[entry.accountId];
     if (account) refreshAccount(account).catch(() => {});
+    sectionsChanged(entry.accountId);
+    schedulePrefetch(5000);
   }
   // Results stay visible in the app for a little while.
   setTimeout(() => withQueue((list) => {
@@ -246,6 +250,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 // Also runs whenever the service worker starts, e.g. woken by the alarm.
 startPush();
+schedulePrefetch(10000);
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === UPDATE_ALARM) return checkUpdateQuietly();
@@ -295,7 +300,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
     pushUnsupported = false; // a reinstalled helper gets another chance
     startPush();
   }
-  if (changes.accounts || Object.keys(changes).some((k) => k.startsWith('mail/'))) updateBadge();
+  if (changes.accounts || Object.keys(changes).some((k) => k.startsWith('mail/'))) {
+    updateBadge();
+    // New mail (or a new account): download what is not cached yet.
+    schedulePrefetch();
+  }
+  if (changes.accounts) {
+    // Cached mail of removed accounts goes too.
+    const before = Object.keys(changes.accounts.oldValue ?? {});
+    const now = new Set(Object.keys(changes.accounts.newValue ?? {}));
+    for (const id of before) if (!now.has(id)) cache.forgetAccount(id);
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -321,6 +336,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (i !== -1) list.splice(i, 1);
     }).then(() => sendResponse({ ok: true }));
     return true;
+  }
+  if (msg?.cmd === 'prefetchNow' && sender.id === chrome.runtime.id) {
+    if (msg.accountId) sectionsChanged(msg.accountId);
+    schedulePrefetch(500);
+    return;
   }
   if (msg?.cmd === 'checkUpdate') {
     checkForUpdate().then((update) => sendResponse({ ok: true, update }), (e) => sendResponse({ ok: false, error: e.message }));
