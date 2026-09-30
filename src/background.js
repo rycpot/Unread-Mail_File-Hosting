@@ -8,6 +8,7 @@ import { notificationClosed, queueNewMail, testNotification } from './notify.js'
 import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
 import { checkForUpdate } from './update.js';
 import { schedulePrefetch, sectionsChanged } from './prefetch.js';
+import { forgetSectionLists } from './section-lists.js';
 import * as cache from './cache-db.js';
 
 onNewMail(queueNewMail);
@@ -309,7 +310,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // Cached mail of removed accounts goes too.
     const before = Object.keys(changes.accounts.oldValue ?? {});
     const now = new Set(Object.keys(changes.accounts.newValue ?? {}));
-    for (const id of before) if (!now.has(id)) cache.forgetAccount(id);
+    for (const id of before) {
+      if (now.has(id)) continue;
+      cache.forgetAccount(id);
+      forgetSectionLists(id);
+    }
   }
 });
 

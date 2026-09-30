@@ -11,6 +11,7 @@ import { getAccounts, getMail, getSettings } from './storage.js';
 import * as cache from './cache-db.js';
 import { completeAndStore } from './message-fetch.js';
 import { mediaKind } from './media-types.js';
+import { putSectionList } from './section-lists.js';
 
 const SECTIONS_EVERY = 15 * 60e3;
 // Videos larger than this download when opened (and are cached then).
@@ -76,12 +77,15 @@ async function prefetchAccount(account) {
     for (const [kind, s] of Object.entries(SECTION_FETCH)) {
       try {
         rows[kind] = (await s.fetch(provider, account)) ?? [];
+        // The app shows these lists at once from here.
+        await putSectionList(account.id, kind, rows[kind]);
       } catch {
         rows[kind] = sectionRows.get(account.id)?.[kind] ?? [];
       }
     }
     try {
       rows.drafts = (await provider.fetchDrafts?.(account, 3)) ?? [];
+      await putSectionList(account.id, 'drafts', rows.drafts);
     } catch {
       rows.drafts = sectionRows.get(account.id)?.drafts ?? [];
     }

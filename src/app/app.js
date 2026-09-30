@@ -16,6 +16,7 @@ import { inlineParts } from './inline-images.js';
 import { fmtDate, fmtDateTime, fmtTime } from './format.js';
 import * as cacheDb from '../cache-db.js';
 import { fetchAttachment, fetchFullMessage } from '../message-fetch.js';
+import { dropFromSectionList, getSectionLists, isSectionListKey, putSectionList } from '../section-lists.js';
 
 // ---------- icons ----------
 
@@ -402,7 +403,6 @@ function renderSidebar() {
     const el = sidebar.querySelector(`[data-scroll="${name}"]`);
     if (el) el.scrollTop = top;
   }
-  saveSectionCache();
   const all = sidebar.querySelector('.pick-all');
   if (all) all.indeterminate = selecting && !allListed;
 }
@@ -469,52 +469,68 @@ function renderSection(kind, key) {
   </div>`;
 }
 
-// Shows the last list at once (if there is one) and refreshes it from the
-// servers behind it; only a section never loaded before shows "Loading…".
+// Shows each account's saved list at once (the background refresh keeps
+// them current) and refreshes it from the servers behind it; only a list
+// never fetched for any of the view's accounts shows "Loading…".
 const sectionSeq = new Map(); // "<kind>/<key>" -> latest load, so older ones are dropped
+
+function combineRows(kind, accounts, lists) {
+  const messages = accounts.flatMap((a) => (lists[a.id]?.[kind] ?? []).map((m) => ({ ...m, accountId: a.id })))
+    .sort((x, y) => y.date - x.date);
+  return SECTION[kind].limit ? messages.slice(0, SECTION[kind].limit) : messages;
+}
+
+async function showSavedSection(kind, key) {
+  const accounts = sectionAccounts(key);
+  const lists = await getSectionLists(accounts.map((a) => a.id));
+  if (!accounts.some((a) => lists[a.id][kind])) return false;
+  const current = state.sections[kind].get(key);
+  state.sections[kind].set(key, { messages: combineRows(kind, accounts, lists), errors: current?.errors ?? [] });
+  return true;
+}
 
 async function loadSection(kind, key) {
   const accounts = sectionAccounts(key);
   const id = `${kind}/${key}`;
   const seq = (sectionSeq.get(id) ?? 0) + 1;
   sectionSeq.set(id, seq);
-  const cached = state.sections[kind].get(key);
-  if (!cached || cached.loading) state.sections[kind].set(key, { loading: true, messages: [] });
-  renderSidebar();
-  const results = await Promise.allSettled(accounts.map(async (a) =>
-    (await SECTION[kind].fetch(providers[a.provider], a)).map((m) => ({ ...m, accountId: a.id }))));
+  if (!(await showSavedSection(kind, key)) && !state.sections[kind].get(key)) {
+    state.sections[kind].set(key, { loading: true, messages: [] });
+  }
   if (sectionSeq.get(id) !== seq) return;
-  const messages = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])).sort((x, y) => y.date - x.date);
+  renderSidebar();
+  const results = await Promise.allSettled(accounts.map(async (a) => {
+    const rows = await SECTION[kind].fetch(providers[a.provider], a);
+    await putSectionList(a.id, kind, rows);
+    return rows;
+  }));
+  if (sectionSeq.get(id) !== seq) return;
   const errors = results.flatMap((r, i) => {
     if (r.status === 'fulfilled') return [];
     const why = r.reason?.name === 'AuthRequiredError' ? 'sign in again' : r.reason?.message;
     return [accounts.length > 1 ? `${accounts[i].email}: ${why}` : why];
   });
-  state.sections[kind].set(key, { messages: SECTION[kind].limit ? messages.slice(0, SECTION[kind].limit) : messages, errors });
+  // Accounts that failed keep their saved list.
+  const lists = await getSectionLists(accounts.map((a) => a.id));
+  state.sections[kind].set(key, { messages: combineRows(kind, accounts, lists), errors });
   renderSidebar();
 }
 
-// The section lists are kept in chrome.storage.session (memory only, cleared
-// when Chrome quits), so they also show at once after the tab is reopened.
-let cacheTimer;
-function saveSectionCache() {
-  clearTimeout(cacheTimer);
-  cacheTimer = setTimeout(() => {
-    const plain = (map) => Object.fromEntries([...map].filter(([, r]) => !r.loading).map(([k, r]) => [k, { messages: r.messages }]));
-    chrome.storage.session.set({ sectionCache: { recent: plain(state.sections.recent), spam: plain(state.sections.spam) } }).catch(() => {});
-  }, 500);
-}
-
-async function restoreSectionCache() {
-  try {
-    const { sectionCache } = await chrome.storage.session.get('sectionCache');
+// The background refreshed some lists: show them in the open sections.
+let savedListsTimer;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !Object.keys(changes).some(isSectionListKey)) return;
+  clearTimeout(savedListsTimer);
+  savedListsTimer = setTimeout(async () => {
+    const key = sectionKey();
+    if (!key) return;
+    let changed = false;
     for (const kind of KINDS) {
-      for (const [key, r] of Object.entries(sectionCache?.[kind] ?? {})) state.sections[kind].set(key, r);
+      if (state.open[kind].has(key) && !state.sections[kind].get(key)?.loading) changed = (await showSavedSection(kind, key)) || changed;
     }
-  } catch {
-    // no cache: sections load when opened
-  }
-}
+    if (changed) renderSidebar();
+  }, 300);
+});
 
 function reloadOpenSections() {
   const key = sectionKey();
@@ -530,6 +546,7 @@ function sectionItems(kind, accountId, messageId) {
 }
 
 function dropFromSections(kind, accountId, messageId) {
+  dropFromSectionList(accountId, kind, messageId).catch(() => {});
   for (const r of state.sections[kind].values()) {
     if (r.messages) r.messages = r.messages.filter((m) => !(m.accountId === accountId && m.id === messageId));
   }
@@ -1406,7 +1423,6 @@ $('clientIdsForm').addEventListener('submit', async (e) => {
 setInterval(renderTopbar, 30000);
 
 state.view = loadView();
-await restoreSectionCache();
 await load();
 // Seed address suggestions with the senders of listed mail (lightly weighted).
 rememberAddresses(Object.values(state.mail).flatMap((m) => (m?.messages ?? []).map((x) => x.from)), 0.2);
@@ -1533,7 +1549,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
   // Fresh Sent / Drafts lists once something was sent.
   const sent = new Set((changes.pendingSends.newValue ?? []).filter((e) => e.status === 'sent').map((e) => e.id));
   if ([...sent].some((id) => !lastSent.has(id))) {
-    for (const kind of ['sent', 'drafts']) for (const key of state.sections[kind].keys()) state.sections[kind].delete(key);
     reloadOpenSections();
   }
   lastSent = sent;

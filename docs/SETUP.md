@@ -269,7 +269,9 @@ Old .doc files are not previewed.
 
 Every email the app lists (unread, Recently read, Sent, Drafts and Spam) is
 downloaded in the background with its images and attachments (videos over
-50 MB only when you open them) as soon as it appears, so it opens instantly, also without a connection. Downloading does not
+50 MB only when you open them) as soon as it appears, so it opens instantly, also without a connection.
+The Recently read, Sent, Drafts and Spam lists are saved too, so they open at once
+and refresh behind the scenes. Downloading does not
 mark anything read.
 
 - It is stored in this Chrome profile on disk (IndexedDB), readable by anyone with
