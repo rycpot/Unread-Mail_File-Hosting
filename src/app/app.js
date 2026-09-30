@@ -8,6 +8,7 @@ import { refreshAccount } from '../sync.js';
 import { buildEmailDocument, bytesToDataUrl } from './render-email.js';
 import { callHelper } from '../native.js';
 import { compareVersions, currentVersion } from '../update.js';
+import { openViewer, viewerKind } from './viewer.js';
 
 // ---------- icons ----------
 
@@ -1188,18 +1189,38 @@ function renderReaderToolbar() {
     ${msg.webUrl ? `<span class="open-web">${pico(state.accounts[msg.accountId]?.provider, 'open-web-icon')}<button class="tool-btn" data-action="open-web">${icon.external}Open in ${esc(providerName)}</button></span>` : ''}`;
 }
 
+async function attachmentBytes(msg, att) {
+  const a = state.accounts[msg.accountId];
+  return providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
+}
+
+function saveBytes(bytes, att) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: att.mimeType || 'application/octet-stream' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: att.filename });
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 async function downloadAttachment(index) {
   const msg = state.message;
   const att = msg.attachments[index];
-  const a = state.accounts[msg.accountId];
   try {
-    const bytes = await providers[a.provider].getAttachment(a, msg.id, att, { folder: msg.folder });
-    const url = URL.createObjectURL(new Blob([bytes], { type: att.mimeType || 'application/octet-stream' }));
-    const link = Object.assign(document.createElement('a'), { href: url, download: att.filename });
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    saveBytes(await attachmentBytes(msg, att), att);
   } catch (e) {
     toast(`Download failed: ${e.message}`, { error: true });
+  }
+}
+
+// PDFs, Word, Excel, images and text open in the viewer; anything else downloads.
+async function openAttachment(index) {
+  const msg = state.message;
+  const att = msg.attachments[index];
+  if (!viewerKind(att.filename, att.mimeType)) return downloadAttachment(index);
+  try {
+    const bytes = await attachmentBytes(msg, att);
+    await openViewer({ filename: att.filename, mimeType: att.mimeType, bytes }, { onDownload: () => saveBytes(bytes, att) });
+  } catch (e) {
+    toast(`Couldn't open ${att.filename}: ${e.message}`, { error: true });
   }
 }
 
@@ -1314,7 +1335,7 @@ document.addEventListener('click', async (e) => {
       state.settings.loadRemoteImages = true;
       return renderReader();
     case 'download':
-      return withBusy(el, () => downloadAttachment(Number(el.dataset.index)));
+      return withBusy(el, () => openAttachment(Number(el.dataset.index)));
   }
 });
 
