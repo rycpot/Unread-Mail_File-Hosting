@@ -34,6 +34,26 @@ export const UPLOADERS = {
       if (expiry) form.append('expiry', expiry);
       return { url: 'https://up.x02.me/api/upload?format=json', headers: { 'x-api-key': s.x02ApiKey.trim() }, form };
     },
+    // The account's latest uploads, including ones made on the x02 website.
+    async list(s) {
+      const res = await fetch(`https://up.x02.me/api/user/dashboard?page=1&limit=${HISTORY_MAX}`, { headers: { 'x-api-key': s.x02ApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      return (body.data?.uploads ?? []).map((f) => ({
+        url: f.url,
+        name: f.originalName || f.filename,
+        stored: f.filename,
+        size: f.size ?? 0,
+        at: Date.parse(f.timestamp) || 0,
+      }));
+    },
+    canDelete: (s) => Boolean(s.x02ApiKey?.trim()),
+    async remove(entry, s) {
+      const name = entry.stored || entry.url.split('/').pop();
+      const res = await fetch(`https://up.x02.me/api/user/images/${encodeURIComponent(name)}`, { method: 'DELETE', headers: { 'x-api-key': s.x02ApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
+    },
     parse(status, text) {
       let body = null;
       try {
@@ -62,6 +82,17 @@ export const UPLOADERS = {
       if (s.catboxUserhash?.trim()) form.append('userhash', s.catboxUserhash.trim());
       form.append('fileToUpload', file, file.name);
       return { url: 'https://catbox.moe/user/api.php', headers: {}, form };
+    },
+    // Catbox can only delete files uploaded with the userhash.
+    canDelete: (s, entry) => Boolean(s.catboxUserhash?.trim() && entry.account),
+    async remove(entry, s) {
+      const form = new FormData();
+      form.append('reqtype', 'deletefiles');
+      form.append('userhash', s.catboxUserhash.trim());
+      form.append('files', entry.url.split('/').pop());
+      const res = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: form });
+      const text = (await res.text()).trim();
+      if (!res.ok || !/deleted/i.test(text)) throw new Error(text || `HTTP ${res.status}`);
     },
     parse(status, text) {
       const t = text.trim();
@@ -126,40 +157,98 @@ const formatSize = (n) => (n < 1024 ? `${n} B` : n < MB ? `${Math.round(n / 1024
 const ICON = {
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>',
   open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>',
 };
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
+const extOf = (name) => (/\.([a-z0-9]{1,5})$/i.exec(name ?? '')?.[1] ?? 'file').toUpperCase();
+
+// A small preview: the image itself, or a file tile with its extension.
+function thumbHtml(name, src) {
+  const tile = `<span class="up-tile">${ICON.file}<b>${esc(extOf(name))}</b></span>`;
+  return src && IMAGE_EXT.test(name) ? `<span class="up-thumb"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">${tile}</span>` : `<span class="up-thumb">${tile}</span>`;
+}
 
 // The panel. panel: the (hidden) element it lives in; reader: the email view
 // it replaces while open. getSettings() returns the current settings.
 export function createUploadPanel({ panel, reader, getSettings, openSettings, toast, onToggle = () => {} }) {
   let service = null;
-  const batches = { x02: [], catbox: [] }; // this tab's uploads, newest first
+  const active = { x02: [], catbox: [] }; // uploads still running or failed in this tab
+  const fresh = new Set(); // links uploaded in this tab (highlighted)
+  const remote = { x02: null }; // the account's list as last fetched: { entries } | { error }
   let expiry = '';
 
-  const linkHtml = (url) => `<button type="button" class="up-link" data-u="copy" data-url="${esc(url)}" title="Click to copy">${esc(url)}</button>
-    <a class="up-open" href="${esc(url)}" target="_blank" rel="noopener" title="Open in a new tab">${ICON.open}</a>`;
+  const rowActions = (e, canDelete) => `
+    <button type="button" class="up-link" data-u="copy" data-url="${esc(e.url)}" title="Click to copy">${esc(e.url)}</button>
+    <button type="button" class="up-icon" data-u="copy" data-url="${esc(e.url)}" title="Copy link">${ICON.copy}</button>
+    <a class="up-icon" href="${esc(e.url)}" target="_blank" rel="noopener" title="Open in a new tab">${ICON.open}</a>
+    ${canDelete ? `<button type="button" class="up-icon danger" data-u="delete" data-url="${esc(e.url)}" title="Delete from ${UPLOADERS[service].name}">${ICON.trash}</button>` : ''}`;
 
-  function rowHtml(r) {
-    const tail = r.url ? linkHtml(r.url)
-      : r.error ? `<span class="up-error">${esc(r.error)}</span>`
+  function activeRowHtml(r) {
+    const tail = r.error ? `<span class="up-error">${esc(r.error)}</span>`
       : `<span class="up-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></span><span class="up-pct">${r.progress >= 1 ? 'Finishing…' : `${Math.round(r.progress * 100)}%`}</span>`;
-    return `<li class="up-row${r.error ? ' failed' : ''}" data-row="${r.id}"><span class="up-file"><span class="up-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="up-size">${formatSize(r.size)}</span></span><span class="up-result">${tail}</span></li>`;
+    return `<li class="up-row${r.error ? ' failed' : ''}" data-row="${r.id}">${thumbHtml(r.name, r.preview)}
+      <span class="up-file"><span class="up-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="up-meta">${formatSize(r.size)}</span></span>
+      <span class="up-result">${tail}${r.error ? `<button type="button" class="up-icon" data-u="dismiss" data-row="${r.id}" title="Dismiss">${ICON.close}</button>` : ''}</span></li>`;
   }
 
+  const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
+  function entryRowHtml(e, s) {
+    const meta = [formatSize(e.size), e.at ? fmtDateTime(e.at) : '', e.expiry ? (expired(e) ? 'expired' : `deletes after ${e.expiry}`) : ''].filter(Boolean).join(' · ');
+    return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, e.url)}
+      <span class="up-file"><span class="up-name" title="${esc(e.name)}">${esc(e.name)}</span><span class="up-meta">${esc(meta)}</span></span>
+      <span class="up-result">${rowActions(e, UPLOADERS[service].canDelete(s, e))}</span></li>`;
+  }
+
+  // The list under "Recent uploads": x02's comes from the account (so it
+  // includes uploads made elsewhere); Catbox has no such list, so it is the
+  // uploads made here.
+  async function entries(svc) {
+    const local = (await readHistory())[svc] ?? [];
+    if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return { list: local };
+    const r = remote.x02;
+    if (!r) return { list: local, loading: true };
+    if (r.error) return { list: local, error: r.error };
+    // Keep what we know locally (expiry) for the same links, and show this
+    // tab's uploads even if the account list doesn't have them yet.
+    const byUrl = new Map(local.map((h) => [h.url, h]));
+    const listed = new Set(r.entries.map((e) => e.url));
+    const pending = local.filter((h) => fresh.has(h.url) && !listed.has(h.url));
+    return { list: [...pending, ...r.entries.map((e) => ({ ...byUrl.get(e.url), ...e }))].slice(0, HISTORY_MAX) };
+  }
+
+  async function fetchRemote(svc) {
+    if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return;
+    try {
+      remote.x02 = { entries: await UPLOADERS.x02.list(getSettings()) };
+    } catch (e) {
+      remote.x02 = { ...(remote.x02 ?? {}), error: e.message };
+    }
+    if (service === svc) render();
+  }
+
+  let renderSeq = 0;
   async function render() {
     if (!service) return;
-    const u = UPLOADERS[service];
+    const seq = ++renderSeq;
+    const svc = service;
+    const u = UPLOADERS[svc];
     const s = getSettings();
-    const history = (await readHistory())[service] ?? [];
-    const shownNow = new Set(batches[service].map((r) => r.url).filter(Boolean));
-    const past = history.filter((h) => !shownNow.has(h.url));
-    const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
+    const { list, loading, error } = await entries(svc);
+    if (seq !== renderSeq || svc !== service) return;
+    const note = loading ? '<p class="up-empty">Loading your x02 uploads…</p>'
+      : error ? `<p class="up-empty error">Couldn't load your x02 uploads (${esc(error)}). Showing the ones made here.</p>` : '';
+    const listHtml = list.length ? `<ul class="up-list">${list.map((e) => entryRowHtml(e, s)).join('')}</ul>`
+      : loading ? '' : `<p class="up-empty">${svc === 'x02' ? 'No uploads yet.' : 'Links you upload here stay listed (the last 20).'}</p>`;
     panel.innerHTML = `
-      <div class="up-panel" data-service="${service}">
+      <div class="up-panel" data-service="${svc}">
         <header class="up-head">
           <img class="up-logo" src="${u.icon}" alt="">
           <div class="up-titles"><h2>Upload to ${u.name}</h2><p class="up-mode">${esc(u.mode(s))}${u.hasAccount(s) ? '' : ' <button type="button" class="link-btn" data-u="settings">Settings</button>'}</p></div>
-          ${service === 'x02' ? `<label class="up-expiry">Delete after <select data-u="expiry">
+          ${svc === 'x02' ? `<label class="up-expiry">Delete after <select data-u="expiry">
             ${[['', 'Never'], ['1h', '1 hour'], ['6h', '6 hours'], ['1d', '1 day'], ['7d', '7 days'], ['30d', '30 days']].map(([v, t]) => `<option value="${v}"${v === expiry ? ' selected' : ''}>${t}</option>`).join('')}
           </select></label>` : ''}
           <button type="button" class="up-close" data-u="close" title="Close (Esc)">${ICON.close}</button>
@@ -170,20 +259,22 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           <p class="up-rules">${esc(u.rules)}</p>
           <input type="file" multiple hidden>
         </div>
-        ${batches[service].length ? `<ul class="up-list">${batches[service].map(rowHtml).join('')}</ul>` : ''}
+        ${active[svc].length ? `<ul class="up-list">${active[svc].map(activeRowHtml).join('')}</ul>` : ''}
         <section class="up-history">
-          <h3>Recent uploads${past.length ? ' <button type="button" class="link-btn" data-u="clear">Clear</button>' : ''}</h3>
-          ${past.length ? `<ul class="up-list">${past.map((h) => `<li class="up-row${expired(h) ? ' expired' : ''}"><span class="up-file"><span class="up-name" title="${esc(h.name)}">${esc(h.name)}</span><span class="up-size">${formatSize(h.size)} · ${fmtDateTime(h.at)}${h.expiry ? ` · ${expired(h) ? 'expired' : `deletes after ${h.expiry}`}` : ''}</span></span><span class="up-result">${linkHtml(h.url)}</span></li>`).join('')}</ul>`
-            : '<p class="up-empty">Links you upload here stay listed (the last 20).</p>'}
+          <h3>Recent uploads
+            ${svc === 'x02' && u.ready(s) ? `<button type="button" class="up-icon small" data-u="refresh" title="Reload from x02">${ICON.refresh}</button>`
+              : list.length ? '<button type="button" class="link-btn" data-u="clear" title="Clears this list (the files stay on Catbox)">Clear list</button>' : ''}
+          </h3>
+          ${note}${listHtml}
         </section>
       </div>`;
   }
 
-  // Updates one row in place (progress events are frequent).
+  // Updates one running upload in place (progress events are frequent).
   function renderRow(svc, r) {
     if (svc !== service) return;
-    const li = panel.querySelector(`[data-row="${r.id}"]`);
-    if (li) li.outerHTML = rowHtml(r);
+    const li = panel.querySelector(`li[data-row="${r.id}"]`);
+    if (li) li.outerHTML = activeRowHtml(r);
     else render();
   }
 
@@ -203,39 +294,70 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const svc = service;
     const s = getSettings();
     if (!svc || !UPLOADERS[svc].ready(s)) return;
-    const rows = [...files].map((f) => ({ id: nextId++, file: f, name: f.name, size: f.size, progress: 0, url: null, error: refuse(svc, f) }));
-    batches[svc].unshift(...rows); // newest drop first, in the order dropped
+    const rows = [...files].map((f) => ({
+      id: nextId++, file: f, name: f.name, size: f.size, progress: 0, error: refuse(svc, f),
+      preview: IMAGE_EXT.test(f.name) && f.size < 50 * MB ? URL.createObjectURL(f) : null,
+    }));
+    active[svc].unshift(...rows); // newest drop first, in the order dropped
     await render();
     const options = { expiry: svc === 'x02' ? expiry : '' };
     const queue = rows.filter((r) => !r.error);
+    const done = [];
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(2, queue.length) }, async () => {
       while (next < queue.length) {
         const r = queue[next++];
         let last = 0;
         try {
-          r.url = await uploadFile(svc, r.file, s, options, (p) => {
+          const url = await uploadFile(svc, r.file, s, options, (p) => {
             r.progress = p;
             if (p - last >= 0.02 || p === 1) {
               last = p;
               renderRow(svc, r);
             }
           });
+          done.push({ order: r.id, url, name: r.name, size: r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc === 'catbox' && s.catboxUserhash?.trim() ? { account: true } : {}) });
+          active[svc] = active[svc].filter((x) => x !== r); // it moves to the list below
+          fresh.add(url);
         } catch (e) {
           r.error = e.message;
         }
         r.file = null;
+        if (r.preview) URL.revokeObjectURL(r.preview);
+        r.preview = null;
         renderRow(svc, r);
       }
     }));
-    const done = rows.filter((r) => r.url);
     if (!done.length) return;
-    await addToHistory(svc, done.map((r) => ({ url: r.url, name: r.name, size: r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}) })));
-    await copy(done.map((r) => r.url).join('\n'), done.length > 1 ? `${done.length} links` : 'Link');
+    // Drop order, in the list and the clipboard (two upload at a time).
+    done.sort((a, b) => a.order - b.order);
+    await addToHistory(svc, done.map(({ order, ...d }) => d));
+    await copy(done.map((d) => d.url).join('\n'), done.length > 1 ? `${done.length} links` : 'Link');
+    await fetchRemote(svc);
     await render();
   }
 
-  const uploading = () => Object.values(batches).flat().some((r) => !r.url && !r.error);
+  async function removeEntry(url) {
+    const svc = service;
+    const { list } = await entries(svc);
+    const entry = list.find((e) => e.url === url);
+    if (!entry) return;
+    if (!confirm(`Delete ${entry.name} from ${UPLOADERS[svc].name}? The link stops working. This can't be undone.`)) return;
+    try {
+      await UPLOADERS[svc].remove(entry, getSettings());
+    } catch (e) {
+      toast(`Couldn't delete: ${e.message}`, { error: true });
+      return;
+    }
+    const all = await readHistory();
+    all[svc] = (all[svc] ?? []).filter((h) => h.url !== url);
+    await chrome.storage.local.set({ [HISTORY_KEY]: all });
+    if (remote[svc]?.entries) remote[svc].entries = remote[svc].entries.filter((e) => e.url !== url);
+    toast(`Deleted ${entry.name}`);
+    render();
+  }
+
+  const uploading = () => Object.values(active).flat().some((r) => !r.error);
 
   panel.addEventListener('click', async (e) => {
     const el = e.target.closest('[data-u]');
@@ -245,15 +367,27 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     else if (act === 'settings') {
       e.stopPropagation(); // the page closes menus on outside clicks
       openSettings();
-    }
-    else if (act === 'copy') copy(el.dataset.url, 'Link');
-    else if (act === 'clear') {
+    } else if (act === 'copy') copy(el.dataset.url, 'Link');
+    else if (act === 'delete') removeEntry(el.dataset.url);
+    else if (act === 'refresh') {
+      remote.x02 = null;
+      render();
+      fetchRemote('x02');
+    } else if (act === 'dismiss') {
+      active[service] = active[service].filter((r) => String(r.id) !== el.dataset.row);
+      render();
+    } else if (act === 'clear') {
       await clearHistory(service);
       render();
     } else if (act === 'choose' && !el.classList.contains('disabled') && !e.target.closest('input')) {
       el.querySelector('input[type="file"]').click();
     }
   });
+  // A preview that can't load (private file, not an image after all) falls
+  // back to the file tile.
+  panel.addEventListener('error', (e) => {
+    if (e.target.matches?.('.up-thumb img')) e.target.remove();
+  }, true);
   panel.addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.up-drop')) {
       e.preventDefault();
@@ -300,6 +434,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     reader.hidden = true;
     panel.hidden = false;
     render();
+    fetchRemote(svc); // the x02 list may have changed on the website
     onToggle(service);
   }
   function close() {
@@ -314,6 +449,11 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     close,
     toggle: (svc) => (service === svc ? close() : open(svc)),
     current: () => service,
-    refresh: () => render(),
+    refresh: () => {
+      if (!service) return;
+      remote.x02 = null; // the key may have changed
+      render();
+      fetchRemote(service);
+    },
   };
 }

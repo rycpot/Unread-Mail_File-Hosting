@@ -273,7 +273,7 @@ function renderRail() {
     html += `<button class="rail-btn upload${uploads?.current() === id ? ' active' : ''}" data-action="upload" data-service="${id}" title="Upload files to ${u.name}" aria-label="Upload files to ${u.name}">
       <img class="rail-icon upload-icon" src="${u.icon}" alt=""></button>`;
   }
-  html += `<span class="rail-sep"></span>
+  html += `<span class="rail-upload-gap"></span>
     <div class="menu-wrap"><button class="rail-btn add" data-action="add-menu" title="Add account" aria-label="Add account">${icon.plus}</button></div>`;
   return `<nav class="rail" aria-label="Providers">${html}</nav>`;
 }
@@ -417,7 +417,22 @@ function renderSidebar() {
   }
   const all = sidebar.querySelector('.pick-all');
   if (all) all.indeterminate = selecting && !allListed;
+  alignUploadIcons();
 }
+
+// The upload icons sit just above the line where Recently read / Sent / … start.
+function alignUploadIcons() {
+  const gap = document.querySelector('.rail-upload-gap');
+  const line = document.querySelector('.recent-toggle');
+  if (!gap) return;
+  gap.style.height = '0px';
+  if (!line) return;
+  const icons = [...document.querySelectorAll('.rail-btn.upload')];
+  const bottom = icons.at(-1)?.getBoundingClientRect().bottom ?? 0;
+  const target = line.getBoundingClientRect().top - 10;
+  gap.style.height = `${Math.max(0, Math.round(bottom - target))}px`;
+}
+addEventListener('resize', () => alignUploadIcons());
 
 // "Recently read" (the last few read inbox emails) and "Spam" (unread spam
 // only) sections, collapsed by default and fetched only when opened. They are

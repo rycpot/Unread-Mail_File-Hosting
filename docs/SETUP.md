@@ -289,8 +289,11 @@ The two icons above **+** in the left rail upload files and give you links to
 share: **x02** (top) and **Catbox**. Click one and the email area becomes a drop
 zone: drop files anywhere on it, or click it to choose files. Each file gets its
 own link; when the uploads finish the links are copied to the clipboard (one per
-line). Click any link to copy it again, or the arrow next to it to open it. The
-last 20 links per service stay listed under **Recent uploads**. Esc, the ✕ or the
+line). Click any link (or the copy icon) to copy it again, or the arrow to open it.
+**Recent uploads** lists the last 20 with a preview (the image itself, or a tile
+with the file type), size, and date and time. For x02 the list comes from your
+account, so it also shows files uploaded on the x02 website; for Catbox it lists
+the uploads made from here (Catbox has no way to list them). Esc, the ✕ or the
 same icon closes the panel and brings the email back.
 
 - **Catbox:** up to 200 MB per file; .exe, .scr, .cpl, .doc* and .jar are refused.
