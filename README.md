@@ -25,8 +25,9 @@ Trash or Deleted Items), without opening the webmail site.
   are end-to-end encrypted and are decrypted inside the extension with OpenPGP.js,
   with no Proton tab opened.
 - **File uploads** to Catbox and x02: the icons above **+** in the left rail open a
-  drop zone; each file gets a link that is shown and copied to the clipboard, and
-  the last 20 links per service stay listed.
+  drop zone; each file gets a link that is shown and copied to the clipboard. The
+  last 20 uploads are listed with previews, dates and delete (x02's list comes
+  from the account).
 - **Offline cache**: every email the app lists (unread, Recently read, Sent,
   Drafts, Spam) is downloaded in the background with its images and attachments,
   so it opens instantly. Stored on this computer, 1 GB by default (Settings).

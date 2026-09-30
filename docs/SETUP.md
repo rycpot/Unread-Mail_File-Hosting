@@ -298,10 +298,12 @@ same icon closes the panel and brings the email back.
 
 - **Catbox:** up to 200 MB per file; .exe, .scr, .cpl, .doc* and .jar are refused.
   Uploads are anonymous unless you add your userhash (catbox.moe → Manage
-  account) in **Settings → Uploads → Catbox userhash**.
+  account) in **Settings → Uploads → Catbox userhash**. Files uploaded with the
+  userhash can be deleted from the list (trash icon); anonymous uploads can't be.
+  **Clear list** only empties the list; the files stay on Catbox.
 - **x02:** needs an API key from the x02 dashboard, in **Settings → Uploads → x02
   API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
-  (1 hour to 30 days).
+  (1 hour to 30 days). The trash icon deletes a file from your x02 account.
 - Uploaded files are public to anyone with the link. The userhash and API key are
   kept in this Chrome profile and only sent to catbox.moe and up.x02.me.
 - Keep the app tab open until uploads finish (Chrome warns if you close it).
