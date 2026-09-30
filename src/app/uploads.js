@@ -187,6 +187,23 @@ const ICON = {
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 const extOf = (name) => (/\.([a-z0-9]{1,5})$/i.exec(name ?? '')?.[1] ?? 'file').toUpperCase();
 
+// Downloading a file in the app (when Catbox or x02 can't fetch a link, e.g.
+// a site with an incomplete certificate chain, which Chrome copes with)
+// needs access to all websites, an optional permission asked for once.
+const ALL_SITES = { origins: ['<all_urls>'] };
+const canDownloadHere = () => chrome.permissions.contains(ALL_SITES).catch(() => false);
+const askDownloadHere = () => chrome.permissions.request(ALL_SITES).catch(() => false);
+
+async function downloadHere(address, fallbackName) {
+  const res = await fetch(address, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`The website refused the download (HTTP ${res.status}).`);
+  const blob = await res.blob();
+  const disposition = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(res.headers.get('content-disposition') ?? '')?.[1];
+  let name = disposition ? decodeURIComponent(disposition) : fallbackName;
+  if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${(blob.type.split('/')[1] || 'bin').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '')}`;
+  return new File([blob], name, { type: blob.type });
+}
+
 const isWebUrl = (s) => typeof s === 'string' && /^https?:\/\/\S+$/i.test(s);
 
 // A readable name for a file fetched from a web address.
@@ -235,7 +252,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       : `<span class="up-bar"><i style="width:${Math.round(r.progress * 100)}%"></i></span><span class="up-pct">${r.progress >= 1 ? 'Finishing…' : `${Math.round(r.progress * 100)}%`}</span>`;
     return `<li class="up-row${r.error ? ' failed' : ''}" data-row="${r.id}">${thumbHtml(r.name, r.preview)}
       <span class="up-file"><span class="up-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="up-meta">${r.size ? formatSize(r.size) : esc(r.source ?? '')}</span></span>
-      <span class="up-result">${tail}${r.error ? `<button type="button" class="up-icon" data-u="dismiss" data-row="${r.id}" title="Dismiss">${ICON.close}</button>` : ''}</span></li>`;
+      <span class="up-result">${tail}${r.retryHere ? `<button type="button" class="up-here" data-u="download-here" data-row="${r.id}" title="Download the file in the app, then upload it">Download it here</button>` : ''}${r.error ? `<button type="button" class="up-icon" data-u="dismiss" data-row="${r.id}" title="Dismiss">${ICON.close}</button>` : ''}</span></li>`;
   }
 
   const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
@@ -355,9 +372,19 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           const got = await UPLOADERS[svc].fromUrl(address, s, options);
           return { url: got.url, size: got.size, name: got.name || name };
         } catch (e) {
-          if (!fallback) throw e;
-          // The service couldn't fetch it (login, hotlink protection…):
-          // upload the pasted picture instead.
+          // The service couldn't fetch it: download it here, if allowed.
+          if (await canDownloadHere()) {
+            try {
+              return await downloadThenUpload(svc, s, options, onProgress, row, address, name);
+            } catch (e2) {
+              if (!fallback) throw e2;
+            }
+          }
+          if (!fallback) {
+            e.retryHere = address; // the row offers "Download it here"
+            throw e;
+          }
+          // Upload the pasted picture instead.
           row.name = fallback.name;
           row.size = fallback.size;
           row.progress = 0;
@@ -367,6 +394,25 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       },
     };
   };
+
+  async function downloadThenUpload(svc, s, options, onProgress, row, address, name) {
+    row.progress = null;
+    row.status = 'Downloading from the website…';
+    onProgress(null);
+    const file = await downloadHere(address, name);
+    const refused = refuse(svc, file);
+    if (refused) throw new Error(refused);
+    row.name = file.name;
+    row.size = file.size;
+    row.progress = 0;
+    const url = await uploadFile(svc, file, s, options, onProgress);
+    return { url, name: file.name, size: file.size };
+  }
+  const hereJob = (address) => ({
+    name: nameFromUrl(address), size: 0, source: 'From a link', check: () => null,
+    preview: IMAGE_EXT.test(nameFromUrl(address)) ? address : null,
+    run: (svc, s, options, onProgress, row) => downloadThenUpload(svc, s, options, onProgress, row, address, nameFromUrl(address)),
+  });
 
   function uploadAll(files) {
     return runJobs([...files].map(fileJob));
@@ -403,6 +449,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           fresh.add(got.url);
         } catch (e) {
           r.error = e.message;
+          r.retryHere = e.retryHere ?? null;
         }
         r.job = null;
         if (r.preview?.startsWith('blob:')) URL.revokeObjectURL(r.preview);
@@ -484,6 +531,15 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       remote.x02 = null;
       render();
       fetchRemote('x02');
+    } else if (act === 'download-here') {
+      const row = active[service].find((r) => String(r.id) === el.dataset.row);
+      if (!row?.retryHere) return;
+      if (!(await askDownloadHere())) {
+        toast('Not allowed, so the file can only be uploaded by dragging it here.', { error: true });
+        return;
+      }
+      active[service] = active[service].filter((r) => r !== row);
+      runJobs([hereJob(row.retryHere)]);
     } else if (act === 'dismiss') {
       active[service] = active[service].filter((r) => String(r.id) !== el.dataset.row);
       render();

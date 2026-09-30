@@ -293,7 +293,13 @@ panel. The service fetches the original file from its address (keeping its forma
 animation and name); if it can't (a site behind a login or blocking outside
 downloads), the pasted picture is uploaded instead, as PNG. Pasting a copied link
 to a file (e.g. **Copy image address**) uploads that file, and a screenshot copied
-to the clipboard (⌘⌃⇧4) uploads too. x02 only accepts image links. Each file gets its
+to the clipboard (⌘⌃⇧4) uploads too. x02 only accepts image links.
+
+If Catbox or x02 can't fetch a link (for example a site whose security certificate
+is set up incompletely, which Chrome copes with but their servers don't), the row
+offers **Download it here**: the app then downloads the file itself and uploads it.
+The first time, Chrome asks to let the extension read data on all websites; it is
+only used for these downloads. After that it happens automatically. Each file gets its
 own link; when the uploads finish the links are copied to the clipboard (one per
 line). Click any link (or the copy icon) to copy it again, or the arrow to open it.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile

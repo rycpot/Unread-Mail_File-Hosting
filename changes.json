@@ -1,4 +1,5 @@
 {
+  "0.11.1": "Uploads: when Catbox or x02 can't fetch a pasted link, \"Download it here\" downloads the file in the app and uploads it (Chrome asks once for access to websites).",
   "0.11.0": "Uploads: paste with ⌘V in the x02 or Catbox panel. A copied image uploads the original file (or the pasted picture if the site blocks it), a copied link uploads that file, and screenshots work too.",
   "0.10.3": "Uploads: Recent uploads keeps the last 100 per service (was 20); Catbox's Clear list button is gone.",
   "0.10.2": "Uploads: a wider panel with a fixed-width link column, and the copy, open and delete icons lined up in straight columns.",

@@ -1108,3 +1108,5 @@ span.up-icon:hover { background: none; }
 /* Uploads fetched from a web address report no progress. */
 .up-bar.busy i { width: 35%; animation: up-busy 1.1s ease-in-out infinite alternate; }
 @keyframes up-busy { from { transform: translateX(-10%); } to { transform: translateX(200%); } }
+.up-here { flex: none; padding: 4px 9px; border: 1px solid var(--accent); border-radius: 6px; background: none; color: var(--accent); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.up-here:hover { background: var(--accent-soft); }
