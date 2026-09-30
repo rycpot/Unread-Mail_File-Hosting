@@ -1,4 +1,4 @@
-![Image](https://files.catbox.moe/lm0jvx.png)
+![Image](https://files.catbox.moe/m39tfo.png)
 # Unread Mail
 
 A Chrome extension (Manifest V3) that shows unread mail from several accounts in one
