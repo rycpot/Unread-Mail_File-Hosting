@@ -2,7 +2,7 @@
 // GitHub branch it is installed from. Installing is done by the IMAP helper
 // (cmd "selfUpdate"), because an unpacked extension cannot change its own files.
 
-export const REPO = 'rycpot/unread-emails-notifier';
+export const REPO = 'rycpot/Unread-Mail_File-Hosting';
 export const BRANCH = 'claude/blissful-faraday-8ykg9h';
 const RAW = `https://raw.githubusercontent.com/${REPO}/${BRANCH}`;
 

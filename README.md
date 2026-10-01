@@ -40,7 +40,7 @@ Any number of accounts per provider.
 Paste into Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rycpot/Unread-Mail_File-Hosting/claude/blissful-faraday-8ykg9h/install.sh | sh
 ```
 
 It downloads the extension into `~/UnreadMail` and installs its small local helper.

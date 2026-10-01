@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs or updates Unread Mail & File Hosting. Paste into Terminal:
 #
-#   curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/rycpot/Unread-Mail_File-Hosting/claude/blissful-faraday-8ykg9h/install.sh | sh
 #
 # First run: downloads the extension into ~/UnreadMail and installs the local
 # helper (needed for iCloud / Yahoo / AOL and for one-click updates). You then
@@ -10,7 +10,7 @@
 # Accounts and settings live in Chrome's storage and are never touched.
 set -eu
 
-REPO="rycpot/unread-emails-notifier"
+REPO="rycpot/Unread-Mail_File-Hosting"
 BRANCH="claude/blissful-faraday-8ykg9h"
 URL="${UNREAD_MAIL_ZIP_URL:-https://codeload.github.com/$REPO/zip/refs/heads/$BRANCH}"
 

@@ -1039,7 +1039,7 @@ def cmd_send(req):
 # extension) before anything is written. src/config.js is kept, as by
 # the installer. Accounts and settings are in Chrome's storage, not in the folder.
 
-UPDATE_REPO = 'rycpot/unread-emails-notifier'
+UPDATE_REPO = 'rycpot/Unread-Mail_File-Hosting'
 UPDATE_BRANCH = 'claude/blissful-faraday-8ykg9h'
 UPDATE_KEEP = {'src/config.js'}
 UPDATE_MAX_BYTES = 50 * 1024 * 1024

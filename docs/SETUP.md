@@ -8,7 +8,7 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
 1. Paste into Terminal (macOS; Linux works too):
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/rycpot/Unread-Mail_File-Hosting/claude/blissful-faraday-8ykg9h/install.sh | sh
    ```
 
    It downloads the extension into `~/UnreadMail` and installs the local helper,
