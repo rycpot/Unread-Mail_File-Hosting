@@ -8,10 +8,12 @@ import { base64ToBytes } from '../util.js';
 import { buildMime, bytesToBase64, newMessageId } from '../compose/mime.js';
 
 function imapProvider({ id, name, webUrl, passwordHelp }) {
+  const inboxUrl = () => webUrl;
   const call = (account, cmd, extra = {}, opts) =>
     callHelper({ cmd, provider: id, email: account.email, ...extra }, opts);
 
   return {
+    inboxUrl,
     id,
     name,
     kind: 'imap',

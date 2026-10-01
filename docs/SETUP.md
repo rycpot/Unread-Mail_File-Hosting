@@ -211,6 +211,20 @@ repository), and remove the account with **⋯ → Remove account** if you stop 
 If you sign out of Proton, the account shows *Signed out*; sign in at
 mail.proton.me again and click **Sign in** in the app.
 
+### Opening a mailbox on the web, and the default account
+
+Double-click an account's chip (at the top of the list) to open that mailbox on the
+provider's website in a new tab; double-click a provider's icon in the left rail to
+open its **default** account. The default is the first chip in the provider's view:
+drag the chips to reorder them, or use **⋯ → Make default** on an account. The
+account menu also has **Open mailbox**.
+
+- Gmail opens the exact account (when several are signed in to Chrome); Proton opens
+  the signed-in session's mailbox.
+- Outlook.com shows one signed-in account at a time; the link suggests the right
+  one, but you may need to switch accounts there. iCloud, Yahoo and AOL open their
+  webmail as signed in.
+
 ## 7. Notifications
 
 **Settings → Notifications → New mail notifications** and **Sound** can be switched

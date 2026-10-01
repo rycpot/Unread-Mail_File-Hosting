@@ -457,7 +457,8 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           r.retryHere = e.retryHere ?? null;
         }
         r.job = null;
-        if (r.preview?.startsWith('blob:')) URL.revokeObjectURL(r.preview);
+        // (later, so a preview still loading isn't cut off)
+        if (r.preview?.startsWith('blob:')) setTimeout(URL.revokeObjectURL, 10000, r.preview);
         r.preview = null;
         renderRow(svc, r);
       }

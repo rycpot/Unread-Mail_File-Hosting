@@ -1,4 +1,5 @@
 {
+  "0.12.0": "Double-click an account chip to open that mailbox on the web, or a provider's icon to open its default account. Drag the chips to reorder them; the first is the default (also ⋯ → Make default).",
   "0.11.2": "Uploads: click a preview or file name to open it in the app's viewer (images, PDFs, video, audio, Word, Excel, text), with ← / → through the list.",
   "0.11.1": "Uploads: when Catbox or x02 can't fetch a pasted link, \"Download it here\" downloads the file in the app and uploads it (Chrome asks once for access to websites).",
   "0.11.0": "Uploads: paste with ⌘V in the x02 or Catbox panel. A copied image uploads the original file (or the pasted picture if the site blocks it), a copied link uploads that file, and screenshots work too.",

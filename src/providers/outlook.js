@@ -15,6 +15,8 @@ const toAddress = (r) => ({ name: r?.emailAddress?.name ?? '', email: r?.emailAd
 export const outlook = {
   id: 'outlook',
   name: 'Outlook',
+  // Outlook.com shows one signed-in account at a time; login_hint suggests which.
+  inboxUrl: (account) => `https://outlook.live.com/mail/0/?login_hint=${encodeURIComponent(account.email)}`,
 
   async identify(token) {
     const res = await fetch(`${API}?$select=userPrincipalName,mail`, {

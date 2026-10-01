@@ -241,6 +241,11 @@ export const proton = {
   name: 'Proton',
   kind: 'session',
   signInUrl: `${ORIGIN}/inbox`,
+  // The session's slot (/u/<localID>/) is the signed-in account in Proton's web app.
+  async inboxUrl(account) {
+    const localID = (await chrome.storage.local.get('protonSessions')).protonSessions?.[account.uid]?.localID ?? 0;
+    return `${ORIGIN}/u/${localID}/inbox`;
+  },
 
   // Every Proton account signed in on mail.proton.me in this Chrome profile.
   async discover() {

@@ -33,6 +33,7 @@ const icon = {
   trash: svg('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>'),
   mailOpen: svg('<path d="M3 9l9-6 9 6v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m3 9 9 6 9-6"/>'),
   mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
+  star: svg('<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>'),
   external: svg('<path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>'),
   eyeOff: svg('<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>'),
   eye: svg('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
@@ -115,7 +116,72 @@ async function load() {
   state.accounts = await getAccounts();
   state.mail = await getAllMail(Object.keys(state.accounts));
   state.settings = await getSettings();
+  state.accountOrder = (await chrome.storage.local.get('accountOrder')).accountOrder ?? [];
 }
+
+// Accounts in the user's order (drag the chips, or "Make default"); the first
+// of a provider is its default, opened by double-clicking the provider's icon.
+// Kept apart from "accounts" so reordering doesn't restart the IMAP push.
+function byUserOrder(a, b) {
+  const rank = (x) => {
+    const i = (state.accountOrder ?? []).indexOf(x.id);
+    return i === -1 ? Infinity : i;
+  };
+  return rank(a) - rank(b) || (a.addedAt ?? 0) - (b.addedAt ?? 0);
+}
+
+async function saveAccountOrder(ids) {
+  // Keep the other providers' accounts where they are.
+  const all = Object.values(state.accounts).sort(byUserOrder).map((a) => a.id);
+  const moved = new Set(ids);
+  const slots = all.map((id, i) => (moved.has(id) ? i : -1)).filter((i) => i !== -1);
+  slots.forEach((slot, k) => (all[slot] = ids[k]));
+  state.accountOrder = all;
+  await chrome.storage.local.set({ accountOrder: all });
+  renderSidebar();
+}
+
+function makeDefault(id) {
+  const a = state.accounts[id];
+  const same = Object.values(state.accounts).filter((x) => x.provider === a.provider).sort(byUserOrder).map((x) => x.id);
+  return saveAccountOrder([id, ...same.filter((x) => x !== id)]);
+}
+
+// Opens the account's mailbox on the provider's website in a new tab.
+async function openMailbox(account) {
+  if (!account) return;
+  const url = await providers[account.provider].inboxUrl?.(account);
+  if (url) chrome.tabs.create({ url });
+}
+// Drag a chip (in a provider's view) to reorder; the first is the default.
+let draggedChip = null;
+document.addEventListener('dragstart', (e) => {
+  const chip = e.target.closest?.('.chip[draggable="true"]');
+  if (!chip) return;
+  draggedChip = chip;
+  chip.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', chip.dataset.account);
+});
+document.addEventListener('dragover', (e) => {
+  const over = e.target.closest?.('.chip[draggable="true"]');
+  if (!draggedChip || !over || over === draggedChip || over.parentElement !== draggedChip.parentElement) return;
+  e.preventDefault();
+  const r = over.getBoundingClientRect();
+  over.parentElement.insertBefore(draggedChip, e.clientX < r.left + r.width / 2 ? over : over.nextSibling);
+});
+document.addEventListener('drop', (e) => {
+  if (draggedChip) e.preventDefault();
+});
+document.addEventListener('dragend', () => {
+  if (!draggedChip) return;
+  const ids = [...draggedChip.parentElement.querySelectorAll('.chip[draggable="true"]')].map((c) => c.dataset.account);
+  draggedChip.classList.remove('dragging');
+  draggedChip = null;
+  saveAccountOrder(ids);
+});
+
+const defaultAccount = (provider) => liveAccounts().find((a) => a.provider === provider && !a.hidden);
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== 'local') return;
@@ -133,7 +199,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 function visibleAccounts() {
   return Object.values(state.accounts)
     .filter((a) => state.settings.showHidden || !a.hidden)
-    .sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0));
+    .sort(byUserOrder);
 }
 
 function renderTopbar() {
@@ -231,8 +297,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') markAllSeen();
 });
 
-const liveAccounts = () =>
-  Object.values(state.accounts).sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0));
+const liveAccounts = () => Object.values(state.accounts).sort(byUserOrder);
 const unreadOf = (a) => state.mail[a.id]?.unreadCount ?? 0;
 const hasProblem = (a) => ['auth', 'error'].includes(state.mail[a.id]?.status);
 
@@ -286,7 +351,9 @@ function renderChips() {
   if (!provider) pool = pool.filter((a) => unreadOf(a) || hasProblem(a) || a.id === account);
   const chip = (a) => {
     const n = unreadOf(a);
-    return `<button class="chip${account === a.id ? ' on' : ''}${a.hidden ? ' dim' : ''}" data-action="view-account" data-account="${esc(a.id)}" title="${esc(a.email)}">
+    const isDefault = defaultAccount(a.provider)?.id === a.id && liveAccounts().filter((x) => x.provider === a.provider).length > 1;
+    const tip = `${a.email}${isDefault ? ' · default' : ''}\nDouble-click to open the mailbox${provider ? '\nDrag to reorder' : ''}`;
+    return `<button class="chip${account === a.id ? ' on' : ''}${a.hidden ? ' dim' : ''}" data-action="view-account" data-account="${esc(a.id)}" title="${esc(tip)}"${provider ? ' draggable="true"' : ''}>
       ${pico(a.provider)}<span class="chip-name">${esc(a.email.split('@')[0])}</span>${n ? `<span class="chip-n">${n}</span>` : ''}${hasProblem(a) ? '<span class="chip-warn"></span>' : ''}</button>`;
   };
   const allLabel = p ? `All ${esc(p.name)}` : 'All accounts';
@@ -756,6 +823,9 @@ function openAccountMenu(button, id) {
   menu.className = 'menu';
   menu.dataset.floating = '1';
   menu.innerHTML = `
+    <button class="menu-item" data-action="open-mailbox" data-account="${esc(id)}">${icon.external}Open mailbox</button>
+    ${Object.values(state.accounts).filter((x) => x.provider === a.provider).length > 1 && defaultAccount(a.provider)?.id !== id
+      ? `<button class="menu-item" data-action="make-default" data-account="${esc(id)}">${icon.star}Make default</button>` : ''}
     <button class="menu-item" data-action="refresh-account" data-account="${esc(id)}">${icon.refresh}Refresh</button>
     <button class="menu-item" data-action="signin" data-account="${esc(id)}">${icon.login}Sign in again</button>
     <button class="menu-item" data-action="${a.hidden ? 'unhide' : 'hide'}" data-account="${esc(id)}">${a.hidden ? icon.eye + 'Unhide' : icon.eyeOff + 'Hide'}</button>
@@ -1265,9 +1335,16 @@ document.addEventListener('click', async (e) => {
     case 'upload':
       return uploads?.toggle(el.dataset.service);
     case 'view':
+      // Double-click on a provider's icon: its default account's mailbox.
+      if (e.detail === 2 && el.dataset.provider && el.classList.contains('rail-btn')) return openMailbox(defaultAccount(el.dataset.provider));
       return setView(el.dataset.provider || null);
     case 'view-account':
+      if (e.detail === 2) return openMailbox(state.accounts[id]); // double-click: the mailbox
       return setView(state.view.provider, id);
+    case 'open-mailbox':
+      return openMailbox(state.accounts[id]);
+    case 'make-default':
+      return makeDefault(id);
     case 'toggle-section': {
       const { kind, key } = el.dataset;
       if (state.open[kind].has(key)) {

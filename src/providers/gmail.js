@@ -12,6 +12,8 @@ const UPLOAD = 'https://gmail.googleapis.com/upload/gmail/v1/users/me';
 export const gmail = {
   id: 'gmail',
   name: 'Gmail',
+  // The account's inbox in Gmail (authuser picks the right signed-in account).
+  inboxUrl: (account) => `https://mail.google.com/mail/?authuser=${encodeURIComponent(account.email)}#inbox`,
 
   async identify(token) {
     const res = await fetch(`${API}/profile`, { headers: { Authorization: `Bearer ${token.accessToken}` } });
