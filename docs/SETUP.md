@@ -321,7 +321,9 @@ arrow icon opens it in a new tab instead.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile
 with the file type), size, and date and time. For x02 the list comes from your
 account, so it also shows files uploaded on the x02 website; for Catbox it lists
-the uploads made from here (Catbox has no way to list them). Esc, the ✕ or the
+the uploads made from here (Catbox has no way to list them). Image previews are
+small thumbnails kept on this computer: made from your file when you upload, or
+from one download of the image otherwise, so they show at once afterwards. Esc, the ✕ or the
 same icon closes the panel and brings the email back.
 
 - **Catbox:** up to 200 MB per file; .exe, .scr, .cpl, .doc* and .jar are refused.

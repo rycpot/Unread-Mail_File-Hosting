@@ -1,4 +1,5 @@
 {
+  "0.12.1": "Upload previews are small thumbnails kept on this computer, so they show instantly without downloading the full images again.",
   "0.12.0": "Double-click an account chip to open that mailbox on the web, or a provider's icon to open its default account. Drag the chips to reorder them; the first is the default (also ⋯ → Make default).",
   "0.11.2": "Uploads: click a preview or file name to open it in the app's viewer (images, PDFs, video, audio, Word, Excel, text), with ← / → through the list.",
   "0.11.1": "Uploads: when Catbox or x02 can't fetch a pasted link, \"Download it here\" downloads the file in the app and uploads it (Chrome asks once for access to websites).",

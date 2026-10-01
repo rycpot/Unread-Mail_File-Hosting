@@ -227,6 +227,58 @@ function renamePasted(f) {
 }
 
 // A small preview: the image itself, or a file tile with its extension.
+// Small thumbnails of uploaded images, kept on this computer so previews show
+// at once without downloading full-size files again: made from the local file
+// right after an upload, otherwise from one download of the image.
+const THUMBS_KEY = 'uploadThumbs';
+const THUMBS_MAX = 300;
+const THUMB_PX = 112; // a 48 px preview on a 2x screen, with room to spare
+let thumbs = null; // url -> data: URL
+const thumbFailed = new Set(); // not retried this session
+async function loadThumbs() {
+  try {
+    thumbs ??= (await chrome.storage.local.get(THUMBS_KEY))[THUMBS_KEY] ?? {};
+  } catch {
+    thumbs ??= {};
+  }
+  return thumbs;
+}
+let thumbSaveTimer;
+function saveThumbs() {
+  clearTimeout(thumbSaveTimer);
+  thumbSaveTimer = setTimeout(() => {
+    const keys = Object.keys(thumbs);
+    for (const k of keys.slice(0, Math.max(0, keys.length - THUMBS_MAX))) delete thumbs[k];
+    chrome.storage.local.set({ [THUMBS_KEY]: thumbs }).catch(() => {});
+  }, 500);
+}
+async function makeThumb(blob) {
+  const bmp = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(THUMB_PX, THUMB_PX);
+  const k = Math.max(THUMB_PX / bmp.width, THUMB_PX / bmp.height); // fill the square, centred
+  const w = bmp.width * k;
+  const h = bmp.height * k;
+  canvas.getContext('2d').drawImage(bmp, (THUMB_PX - w) / 2, (THUMB_PX - h) / 2, w, h);
+  bmp.close();
+  const out = await canvas.convertToBlob({ type: 'image/webp', quality: 0.8 });
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(out);
+  });
+}
+async function storeThumb(url, blob) {
+  try {
+    await loadThumbs();
+    thumbs[url] = await makeThumb(blob);
+    saveThumbs();
+    return thumbs[url];
+  } catch {
+    thumbFailed.add(url);
+    return null;
+  }
+}
+
 function thumbHtml(name, src) {
   const tile = `<span class="up-tile">${ICON.file}<b>${esc(extOf(name))}</b></span>`;
   return src && IMAGE_EXT.test(name) ? `<span class="up-thumb"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">${tile}</span>` : `<span class="up-thumb">${tile}</span>`;
@@ -258,11 +310,43 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   }
 
   const expired = (h) => h.expiry && EXPIRY_MS[h.expiry] && Date.now() > h.at + EXPIRY_MS[h.expiry];
+  // Makes missing thumbnails (three at a time) and shows them as they come.
+  const thumbQueue = [];
+  let thumbWorkers = 0;
+  function requestThumb(url) {
+    if (thumbFailed.has(url) || thumbQueue.includes(url)) return;
+    thumbQueue.push(url);
+    while (thumbWorkers < 3 && thumbQueue.length) {
+      thumbWorkers++;
+      (async () => {
+        while (thumbQueue.length) {
+          const next = thumbQueue.shift();
+          if (thumbs?.[next] || thumbFailed.has(next)) continue;
+          let src = null;
+          try {
+            const res = await fetch(next, { credentials: 'omit' });
+            if (res.ok) src = await storeThumb(next, await res.blob());
+            else thumbFailed.add(next);
+          } catch {
+            thumbFailed.add(next);
+          }
+          if (!src) continue;
+          for (const el of panel.querySelectorAll('.up-thumb[data-thumb]')) {
+            if (el.dataset.thumb === next && !el.querySelector('img')) el.insertAdjacentHTML('afterbegin', `<img src="${src}" alt="">`);
+          }
+        }
+        thumbWorkers--;
+      })();
+    }
+  }
+
   function entryRowHtml(e, s) {
     const meta = [e.size ? formatSize(e.size) : '', e.at ? fmtDateTime(e.at) : '', e.expiry ? (expired(e) ? 'expired' : `deletes after ${e.expiry}`) : ''].filter(Boolean).join(' · ');
     // The preview and the name open the file in the app's viewer.
     const view = `data-u="view" data-url="${esc(e.url)}" role="button" tabindex="0"`;
-    return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, e.url).replace('<span class="up-thumb"', `<span class="up-thumb viewable" ${view} title="Open ${esc(e.name)}"`)}
+    const thumb = thumbs?.[e.url] ?? null;
+    if (!thumb && IMAGE_EXT.test(e.name)) requestThumb(e.url);
+    return `<li class="up-row${fresh.has(e.url) ? ' fresh' : ''}${expired(e) ? ' expired' : ''}">${thumbHtml(e.name, thumb).replace('<span class="up-thumb"', `<span class="up-thumb viewable" data-thumb="${esc(e.url)}" ${view} title="Open ${esc(e.name)}"`)}
       <span class="up-file"><span class="up-name viewable" ${view} title="Open ${esc(e.name)}">${esc(e.name)}</span><span class="up-meta">${esc(meta)}</span></span>
       <span class="up-result">${rowActions(e, UPLOADERS[service].canDelete(s, e))}</span></li>`;
   }
@@ -301,6 +385,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const svc = service;
     const u = UPLOADERS[svc];
     const s = getSettings();
+    await loadThumbs();
     const { list, loading, error } = await entries(svc);
     if (seq !== renderSeq || svc !== service) return;
     shown = list;
@@ -359,7 +444,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   const fileJob = (f) => ({
     name: f.name, size: f.size, check: (svc) => refuse(svc, f),
     preview: IMAGE_EXT.test(f.name) && f.size < 50 * MB ? URL.createObjectURL(f) : null,
-    run: (svc, s, options, onProgress) => uploadFile(svc, f, s, options, onProgress).then((url) => ({ url })),
+    run: (svc, s, options, onProgress) => uploadFile(svc, f, s, options, onProgress).then((url) => ({ url, thumbFrom: f })),
   });
   const urlJob = (address, fallback) => {
     const name = nameFromUrl(address);
@@ -394,7 +479,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           row.size = fallback.size;
           row.progress = 0;
           const url = await uploadFile(svc, fallback, s, options, onProgress);
-          return { url, name: fallback.name, size: fallback.size };
+          return { url, name: fallback.name, size: fallback.size, thumbFrom: fallback };
         }
       },
     };
@@ -411,7 +496,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     row.size = file.size;
     row.progress = 0;
     const url = await uploadFile(svc, file, s, options, onProgress);
-    return { url, name: file.name, size: file.size };
+    return { url, name: file.name, size: file.size, thumbFrom: file };
   }
   const hereJob = (address) => ({
     name: nameFromUrl(address), size: 0, source: 'From a link', check: () => null,
@@ -452,6 +537,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           done.push({ order: r.id, url: got.url, name: got.name ?? r.name, size: got.size ?? r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc === 'catbox' && s.catboxUserhash?.trim() ? { account: true } : {}) });
           active[svc] = active[svc].filter((x) => x !== r); // it moves to the list below
           fresh.add(got.url);
+          if (got.thumbFrom && IMAGE_EXT.test(got.name ?? r.name)) await storeThumb(got.url, got.thumbFrom);
         } catch (e) {
           r.error = e.message;
           r.retryHere = e.retryHere ?? null;
@@ -517,6 +603,10 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     all[svc] = (all[svc] ?? []).filter((h) => h.url !== url);
     await chrome.storage.local.set({ [HISTORY_KEY]: all });
     if (remote[svc]?.entries) remote[svc].entries = remote[svc].entries.filter((e) => e.url !== url);
+    if (thumbs?.[url]) {
+      delete thumbs[url];
+      saveThumbs();
+    }
     toast(`Deleted ${entry.name}`);
     render();
   }
