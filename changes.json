@@ -1,4 +1,5 @@
 {
+  "0.12.3": "Updated extension description (mentions file hosting).",
   "0.12.2": "New name: Unread Mail & File Hosting.",
   "0.12.1": "Upload previews are small thumbnails kept on this computer, so they show instantly without downloading the full images again.",
   "0.12.0": "Double-click an account chip to open that mailbox on the web, or a provider's icon to open its default account. Drag the chips to reorder them; the first is the default (also ⋯ → Make default).",
