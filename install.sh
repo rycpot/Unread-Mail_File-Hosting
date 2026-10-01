@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs or updates Unread Mail. Paste into Terminal:
+# Installs or updates Unread Mail & File Hosting. Paste into Terminal:
 #
 #   curl -fsSL https://raw.githubusercontent.com/rycpot/unread-emails-notifier/claude/blissful-faraday-8ykg9h/install.sh | sh
 #
@@ -70,7 +70,7 @@ if [ "$(uname -s)" = Darwin ]; then
   case "$(real "$DEST")" in
     "$HOME/Downloads/"*|"$HOME/Documents/"*|"$HOME/Desktop/"*)
       SPARE="$HOME/UnreadMail"
-      if [ -d "$SPARE" ] && [ ! -L "$SPARE" ] && grep -q '"name": "Unread Mail"' "$SPARE/manifest.json" 2>/dev/null \
+      if [ -d "$SPARE" ] && [ ! -L "$SPARE" ] && grep -q '"name": "Unread Mail' "$SPARE/manifest.json" 2>/dev/null \
         && [ -z "$(in_use "$SPARE")" ]; then
         OLD="$SPARE-unused-$(date +%Y%m%d-%H%M%S)"
         mv "$SPARE" "$OLD"
@@ -82,8 +82,8 @@ fi
 
 FRESH=1
 if [ -e "$DEST" ]; then
-  if ! grep -q '"name": "Unread Mail"' "$DEST/manifest.json" 2>/dev/null; then
-    echo "$DEST already exists and is not Unread Mail. Move it away (or set UNREAD_MAIL_DIR) and run this again." >&2
+  if ! grep -q '"name": "Unread Mail' "$DEST/manifest.json" 2>/dev/null; then
+    echo "$DEST already exists and is not Unread Mail & File Hosting. Move it away (or set UNREAD_MAIL_DIR) and run this again." >&2
     exit 1
   fi
   FRESH=0
@@ -91,7 +91,7 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-echo "Downloading Unread Mail…"
+echo "Downloading Unread Mail & File Hosting…"
 curl -fsSL "$URL" -o "$TMP/unread-mail.zip"
 unzip -q "$TMP/unread-mail.zip" -d "$TMP/x"
 SRC="$(find "$TMP/x" -mindepth 2 -maxdepth 2 -name manifest.json -exec dirname {} \; | head -n 1)"
@@ -113,7 +113,7 @@ VERSION="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' "$DEST/manifest.json" | head 
 
 if [ "$FRESH" = 1 ]; then
   echo
-  echo "Unread Mail $VERSION is in $DEST"
+  echo "Unread Mail & File Hosting $VERSION is in $DEST"
   echo "Last step, in Chrome:"
   echo "  1. Open chrome://extensions and turn on Developer mode (top right)."
   echo "  2. Click Load unpacked, press Cmd+Shift+G, paste (Cmd+V) and press Return, then Select."
@@ -124,6 +124,6 @@ if [ "$FRESH" = 1 ]; then
   echo "Then follow docs/SETUP.md to connect your accounts."
 else
   echo
-  echo "Updated Unread Mail to $VERSION in $DEST"
-  echo "Click reload (↻) on Unread Mail in chrome://extensions to use it."
+  echo "Updated Unread Mail & File Hosting to $VERSION in $DEST"
+  echo "Click reload (↻) on Unread Mail & File Hosting in chrome://extensions to use it."
 fi

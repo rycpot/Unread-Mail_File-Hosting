@@ -1,7 +1,7 @@
 ![Image](https://files.catbox.moe/m39tfo.png)
 ![Image](https://files.catbox.moe/e76gaz.png)
 ![Image](https://files.catbox.moe/99ibyp.png)
-# Unread Mail
+# Unread Mail & File Hosting
 
 A Chrome extension (Manifest V3) that shows unread mail from several accounts in one
 full tab. Click an email to read it, mark it read or unread, or delete it (moves it to

@@ -212,7 +212,7 @@ function renderTopbar() {
   }
   $('total').hidden = total === 0;
   $('total').textContent = total > 999 ? '999+' : total;
-  document.title = total ? `(${total}) Unread Mail` : 'Unread Mail';
+  document.title = total ? `(${total}) Unread Mail & File Hosting` : 'Unread Mail & File Hosting';
   // The icon's red dot means "unread mail"; show it only when there is some.
   const iconFile = `../../icons/icon-${total ? '' : 'plain-'}32.png`;
   if (!$('favicon').href.endsWith(iconFile.slice(5))) $('favicon').href = iconFile;
