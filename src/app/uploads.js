@@ -72,6 +72,12 @@ export const UPLOADERS = {
         at: Date.parse(f.timestamp) || 0,
       }));
     },
+    // The account summary answers 401 to a key x02 doesn't know.
+    async verify(key) {
+      const res = await fetch('https://up.x02.me/api/user/dashboard?page=1&limit=1', { headers: { 'x-api-key': key } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
+    },
     canDelete: (s) => Boolean(s.x02ApiKey?.trim()),
     async remove(entry, s) {
       const name = entry.stored || entry.url.split('/').pop();
@@ -152,6 +158,18 @@ export const UPLOADERS = {
     // ImgLink can't fetch a link; this hands over to downloading it here.
     async fromUrl() {
       throw new Error("ImgLink can't fetch links itself.");
+    },
+    // Asks to change an image that doesn't exist: a good key gets "not found",
+    // a bad one 401. Nothing is uploaded or changed.
+    async verify(key) {
+      const res = await fetch('https://imglink.cc/api/v1/image/keyCheck0', {
+        method: 'PATCH',
+        headers: { 'x-api-key': key, 'content-type': 'application/json' },
+        body: JSON.stringify({ nsfw: false }),
+      });
+      if (res.ok || res.status === 404) return;
+      const body = await res.json().catch(() => null);
+      throw new Error(res.status === 401 || res.status === 403 ? 'ImgLink says the key is invalid' : body?.error || `HTTP ${res.status}`);
     },
     // Only uploads made with the API key can be deleted, by anyone.
     canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
