@@ -297,17 +297,18 @@ mark anything read.
 - Emails no longer listed for 14 days are removed, and removing an account removes
   its cached mail.
 
-## 11. Uploading files (Catbox, x02)
+## 11. Uploading files (Catbox, x02, ImgLink)
 
-The two icons above **+** in the left rail upload files and give you links to
-share: **x02** (top) and **Catbox**. Click one and the email area becomes a drop
+The three icons above **+** in the left rail upload files and give you links to
+share: **x02** (top), **Catbox** and **ImgLink**. Click one and the email area becomes a drop
 zone: drop files anywhere on it, or click it to choose files. You can also paste
 (⌘V): right-click an image on any web page → **Copy image**, then paste in the
 panel. The service fetches the original file from its address (keeping its format,
 animation and name); if it can't (a site behind a login or blocking outside
 downloads), the pasted picture is uploaded instead, as PNG. Pasting a copied link
 to a file (e.g. **Copy image address**) uploads that file, and a screenshot copied
-to the clipboard (⌘⌃⇧4) uploads too. x02 only accepts image links.
+to the clipboard (⌘⌃⇧4) uploads too. x02 only accepts image links. ImgLink can't
+fetch links at all, so for it a copied link is always downloaded here (below).
 
 If Catbox or x02 can't fetch a link (for example a site whose security certificate
 is set up incompletely, which Chrome copes with but their servers don't), the row
@@ -320,8 +321,8 @@ open the file in the app's viewer (← / → move through the list, Esc closes i
 arrow icon opens it in a new tab instead.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile
 with the file type), size, and date and time. For x02 the list comes from your
-account, so it also shows files uploaded on the x02 website; for Catbox it lists
-the uploads made from here (Catbox has no way to list them). Image previews are
+account, so it also shows files uploaded on the x02 website; for Catbox and ImgLink
+it lists the uploads made from here (they have no way to list them). Image previews are
 small thumbnails kept on this computer: made from your file when you upload, or
 from one download of the image otherwise, so they show at once afterwards. Esc, the ✕ or the
 same icon closes the panel and brings the email back.
@@ -333,8 +334,13 @@ same icon closes the panel and brings the email back.
 - **x02:** needs an API key from the x02 dashboard, in **Settings → Uploads → x02
   API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
   (1 hour to 30 days). The trash icon deletes a file from your x02 account.
-- Uploaded files are public to anyone with the link. The userhash and API key are
-  kept in this Chrome profile and only sent to catbox.moe and up.x02.me.
+- **ImgLink:** images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to
+  50 MB. Every upload is sent as private, so it is never in ImgLink's public
+  gallery or search. Uploads are anonymous unless you add an API key (imglink.cc →
+  Dashboard → API Keys) in **Settings → Uploads → ImgLink API key**. Files uploaded
+  with the key can be deleted from the list (trash icon); anonymous uploads can't be.
+- Uploaded files are public to anyone with the link. The userhash and API keys are
+  kept in this Chrome profile and only sent to catbox.moe, up.x02.me and imglink.cc.
 - Keep the app tab open until uploads finish (Chrome warns if you close it).
 
 ## Troubleshooting

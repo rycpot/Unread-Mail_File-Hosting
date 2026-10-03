@@ -1000,7 +1000,7 @@ label.s-row { cursor: pointer; }
 .mp-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-size { flex: none; color: #9aa0a6; font-size: 12px; }
 
-/* ---------- file uploads (Catbox, x02) ---------- */
+/* ---------- file uploads (Catbox, x02, ImgLink) ---------- */
 .rail-upload-gap { flex: none; width: 1px; }
 .rail-btn.upload .upload-icon { border-radius: 7px; }
 

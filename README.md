@@ -25,7 +25,7 @@ Trash or Deleted Items), without opening the webmail site.
   unread list, mark read/unread, delete and Recently read. Bodies and attachments
   are end-to-end encrypted and are decrypted inside the extension with OpenPGP.js,
   with no Proton tab opened.
-- **File uploads** to Catbox and x02: the icons above **+** in the left rail open a
+- **File uploads** to Catbox, x02 and ImgLink: the icons above **+** in the left rail open a
   drop zone (or paste a copied image, link or screenshot with ⌘V); each file gets a link that is shown and copied to the clipboard. The
   last 100 uploads are listed with previews, dates and delete (x02's list comes
   from the account).
@@ -95,8 +95,8 @@ src/app/compose.js       compose window (editor, recipients, attachments, drafts
 src/app/contacts.js      address suggestions
 src/app/viewer.js        attachment viewer
 src/app/media-player.js  video/audio player for the viewer
-src/app/uploads.js       Catbox / x02 file uploads (panel, history)
-icons/uploads/           Catbox and x02 icons
+src/app/uploads.js       Catbox / x02 / ImgLink file uploads (panel, history)
+icons/uploads/           Catbox, x02 and ImgLink icons
 src/media-types.js       video/audio file types
 src/cache-db.js          offline cache (IndexedDB)
 src/section-lists.js     saved Recently read / Sent / Drafts / Spam lists

@@ -1,4 +1,4 @@
-// File uploads to Catbox (catbox.moe) and x02 (x02.me), an independent module
+// File uploads to Catbox (catbox.moe), x02 (x02.me) and ImgLink (imglink.cc), an independent module
 // of the app: the rail icons open a panel in place of the email view; any
 // files dropped on it (or chosen) are uploaded one link each, the links are
 // shown and copied to the clipboard, and the last 100 per service are kept on
@@ -11,6 +11,12 @@
 // and one "file" field (optional "expiry": 1h 6h 1d 7d 30d); the reply is
 // { success, data: { url, … } } or { success: false, error }. 200 MB on the
 // Free plan, 512 MB on Pro (the server says which).
+// ImgLink: POST https://imglink.cc/api/v1/upload with an x-api-key header (your
+// account), or https://imglink.cc/api/upload without one (anonymous); one
+// "file" field plus visibility=private, so uploads are never in
+// its public gallery. The reply is { success, id, url, … } or { error }.
+// Images only, 50 MB. It can't fetch a link itself and has no list of an
+// account's uploads; only uploads made with the key can be deleted.
 
 import { fmtDateTime } from './format.js';
 import { openViewer } from './viewer.js';
@@ -127,12 +133,54 @@ export const UPLOADERS = {
       throw new Error(`Catbox: ${t.slice(0, 200) || `HTTP ${status}`}`);
     },
   },
+  imglink: {
+    name: 'ImgLink',
+    icon: '/icons/uploads/imglink.png',
+    maxBytes: 50 * MB,
+    accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
+    rules: 'Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to 50 MB. Unlisted: only people with the link see them.',
+    ready: () => true,
+    hasAccount: (s) => Boolean(s.imglinkApiKey?.trim()),
+    mode: (s) => (s.imglinkApiKey?.trim() ? 'Uploading to your ImgLink account.' : 'Anonymous uploads. Add your API key to use your account.'),
+    request(file, s) {
+      const key = s.imglinkApiKey?.trim();
+      const form = new FormData();
+      form.append('visibility', 'private');
+      form.append('file', file, file.name);
+      return { url: key ? 'https://imglink.cc/api/v1/upload' : 'https://imglink.cc/api/upload', headers: key ? { 'x-api-key': key } : {}, form };
+    },
+    // ImgLink can't fetch a link; this hands over to downloading it here.
+    async fromUrl() {
+      throw new Error("ImgLink can't fetch links itself.");
+    },
+    // Only uploads made with the API key can be deleted, by anyone.
+    canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
+    async remove(entry, s) {
+      const id = entry.url.split('/').pop().replace(/\.[^.]*$/, ''); // https://imglink.cc/cdn/<id>.<ext>
+      const res = await fetch(`https://imglink.cc/api/v1/image/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'x-api-key': s.imglinkApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok && res.status !== 404) throw new Error(body?.error || `HTTP ${res.status}`); // 404: already gone
+    },
+    parse(status, text) {
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      const url = body?.url || body?.images?.[0]?.url;
+      if (status >= 200 && status < 300 && /^https:\/\//i.test(url ?? '')) return url;
+      const why = body?.error || body?.message || text.trim().slice(0, 200) || `HTTP ${status}`;
+      if (status === 401 || status === 403) throw new Error(`ImgLink refused the API key: ${why}`);
+      if (status === 413) throw new Error('Too large for ImgLink, or your ImgLink storage is full.');
+      if (status === 429) throw new Error('ImgLink upload limit reached; try again later.');
+      throw new Error(`ImgLink: ${why}`);
+    },
+  },
 };
 
 // Why a file can't go to this service, or null.
 export function refuse(service, file) {
   const u = UPLOADERS[service];
-  if (u.blocked?.test(file.name)) return `${u.name} doesn't accept this type of file.`;
+  if (u.blocked?.test(file.name) || (u.accepts && !u.accepts.test(file.name))) return `${u.name} doesn't accept this type of file.`;
   if (file.size > u.maxBytes) return `Larger than ${u.name}'s ${Math.round(u.maxBytes / MB)} MB limit.`;
   if (!file.size) return 'The file is empty.';
   return null;
@@ -288,7 +336,7 @@ function thumbHtml(name, src) {
 // it replaces while open. getSettings() returns the current settings.
 export function createUploadPanel({ panel, reader, getSettings, openSettings, toast, onToggle = () => {} }) {
   let service = null;
-  const active = { x02: [], catbox: [] }; // uploads still running or failed in this tab
+  const active = Object.fromEntries(Object.keys(UPLOADERS).map((k) => [k, []])); // uploads still running or failed in this tab
   const fresh = new Set(); // links uploaded in this tab (highlighted)
   const remote = { x02: null }; // the account's list as last fetched: { entries } | { error }
   let expiry = '';
@@ -352,8 +400,8 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   }
 
   // The list under "Recent uploads": x02's comes from the account (so it
-  // includes uploads made elsewhere); Catbox has no such list, so it is the
-  // uploads made here.
+  // includes uploads made elsewhere); Catbox and ImgLink have no such list, so
+  // it is the uploads made here.
   async function entries(svc) {
     const local = ((await readHistory())[svc] ?? []).slice(0, HISTORY_MAX);
     if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return { list: local };
@@ -534,7 +582,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         };
         try {
           const got = await r.job.run(svc, s, options, onProgress, r);
-          done.push({ order: r.id, url: got.url, name: got.name ?? r.name, size: got.size ?? r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc === 'catbox' && s.catboxUserhash?.trim() ? { account: true } : {}) });
+          done.push({ order: r.id, url: got.url, name: got.name ?? r.name, size: got.size ?? r.size, at: Date.now(), ...(options.expiry ? { expiry: options.expiry } : {}), ...(svc !== 'x02' && UPLOADERS[svc].hasAccount(s) ? { account: true } : {}) });
           active[svc] = active[svc].filter((x) => x !== r); // it moves to the list below
           fresh.add(got.url);
           if (got.thumbFrom && IMAGE_EXT.test(got.name ?? r.name)) await storeThumb(got.url, got.thumbFrom);
