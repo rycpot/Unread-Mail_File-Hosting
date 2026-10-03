@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   cacheLimitMB: 1024,
   catboxUserhash: '',
   x02ApiKey: '',
+  imglinkApiKey: '',
 };
 
 // How many unread messages to keep per account in the sidebar.

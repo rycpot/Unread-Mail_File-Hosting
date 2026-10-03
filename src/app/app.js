@@ -228,6 +228,7 @@ function renderTopbar() {
   if (document.activeElement !== $('senderName')) $('senderName').value = state.settings.senderName ?? '';
   if (document.activeElement !== $('catboxUserhash')) $('catboxUserhash').value = state.settings.catboxUserhash ?? '';
   if (document.activeElement !== $('x02ApiKey')) $('x02ApiKey').value = state.settings.x02ApiKey ?? '';
+  if (document.activeElement !== $('imglinkApiKey')) $('imglinkApiKey').value = state.settings.imglinkApiKey ?? '';
   $('loadRemoteImages').checked = state.settings.loadRemoteImages;
   $('showHidden').checked = Boolean(state.settings.showHidden);
 }
@@ -1498,8 +1499,9 @@ async function showCacheUsage() {
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
 $('catboxUserhash').addEventListener('change', (e) => saveSettings({ catboxUserhash: e.target.value.trim() }));
 $('x02ApiKey').addEventListener('change', (e) => saveSettings({ x02ApiKey: e.target.value.trim() }));
+$('imglinkApiKey').addEventListener('change', (e) => saveSettings({ imglinkApiKey: e.target.value.trim() }));
 
-// ---------- file uploads (Catbox, x02) ----------
+// ---------- file uploads (Catbox, x02, ImgLink) ----------
 
 uploads = createUploadPanel({
   panel: $('uploadPanel'),
@@ -1511,7 +1513,7 @@ uploads = createUploadPanel({
     $('settingsMenu').hidden = false;
     fillClientIds();
     showCacheUsage();
-    const field = uploads.current() === 'catbox' ? $('catboxUserhash') : $('x02ApiKey');
+    const field = $({ catbox: 'catboxUserhash', x02: 'x02ApiKey', imglink: 'imglinkApiKey' }[uploads.current()] ?? 'x02ApiKey');
     field.scrollIntoView({ block: 'nearest' });
     field.focus();
   },
