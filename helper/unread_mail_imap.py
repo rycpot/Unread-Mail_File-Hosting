@@ -38,7 +38,7 @@ import time
 import urllib.request
 import zipfile
 
-VERSION = 7
+VERSION = 8
 KEYCHAIN_SERVICE = 'unread-mail-imap'
 # Replies to Chrome are limited to 1 MB each; larger payloads are split.
 CHUNK_CHARS = 600_000
@@ -208,23 +208,43 @@ def tls_context():
     return ctx
 
 
+# Login replies that mean the email or app password itself was refused. Any
+# other refused login (Yahoo's "Server error - Please try again later",
+# too many connections, a dropped connection) is temporary and must not be
+# shown as signed out.
+CREDENTIALS_REJECTED = re.compile(
+    r'AUTHENTICATIONFAILED|AUTHORIZATIONFAILED|invalid credentials|authentication failed|'
+    r'incorrect (?:username|password)|invalid (?:username|password)',
+    re.IGNORECASE)
+LOGIN_RETRY_DELAY_S = 3
+
+
 def connect(provider, email_addr, password=None):
     host, port, insecure = server_for(provider)
     ctx = tls_context()
     if insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    try:
-        conn = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=30)
-    except OSError as e:
-        raise HelperError('network', 'Could not reach {}: {}'.format(host, e))
     if password is None:
         password = get_password(key(provider, email_addr))
-    try:
-        conn.login(email_addr, password)
-    except imaplib.IMAP4.error as e:
-        raise HelperError('auth', 'Login failed: ' + _text(e.args[0] if e.args else e))
-    return conn
+    # A temporarily refused login is tried once more on a new connection; a
+    # rejected password is reported at once (retrying it achieves nothing).
+    for attempt in (1, 2):
+        try:
+            conn = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=30)
+        except OSError as e:
+            raise HelperError('network', 'Could not reach {}: {}'.format(host, e))
+        try:
+            conn.login(email_addr, password)
+            return conn
+        except imaplib.IMAP4.error as e:
+            reply = _text(e.args[0] if e.args else e)
+            _logout(conn)
+            if CREDENTIALS_REJECTED.search(reply):
+                raise HelperError('auth', 'Login failed: ' + reply)
+            if attempt == 2:
+                raise HelperError('login', '{} refused the login for now: {}'.format(host, reply))
+            time.sleep(LOGIN_RETRY_DELAY_S)
 
 
 def key(provider, email_addr):
