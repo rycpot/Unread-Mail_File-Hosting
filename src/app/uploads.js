@@ -27,6 +27,61 @@ const HISTORY_MAX = 100;
 const EXPIRY_MS = { '1h': 3600e3, '6h': 6 * 3600e3, '1d': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
 
 export const UPLOADERS = {
+  imglink: {
+    name: 'ImgLink',
+    icon: '/icons/uploads/imglink.png',
+    // 25 MB per file anonymously, 50 MB with the key.
+    maxBytes: (s) => (s.imglinkApiKey?.trim() ? 50 : 25) * MB,
+    accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
+    rules: (s) => `Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to ${s.imglinkApiKey?.trim() ? '50 MB' : '25 MB (50 MB with your API key)'}. Unlisted: only people with the link see them.`,
+    ready: () => true,
+    hasAccount: (s) => Boolean(s.imglinkApiKey?.trim()),
+    mode: (s) => (s.imglinkApiKey?.trim() ? 'Uploading to your ImgLink account.' : 'Anonymous uploads. Add your API key to use your account.'),
+    request(file, s) {
+      const key = s.imglinkApiKey?.trim();
+      const form = new FormData();
+      form.append('visibility', 'private');
+      form.append('file', file, file.name);
+      return { url: key ? 'https://imglink.cc/api/v1/upload' : 'https://imglink.cc/api/upload', headers: key ? { 'x-api-key': key } : {}, form };
+    },
+    // ImgLink can't fetch a link; this hands over to downloading it here.
+    async fromUrl() {
+      throw new Error("ImgLink can't fetch links itself.");
+    },
+    // Asks to change an image that doesn't exist: a good key gets "not found",
+    // a bad one 401. Nothing is uploaded or changed.
+    async verify(key) {
+      const res = await fetch('https://imglink.cc/api/v1/image/keyCheck0', {
+        method: 'PATCH',
+        headers: { 'x-api-key': key, 'content-type': 'application/json' },
+        body: JSON.stringify({ nsfw: false }),
+      });
+      if (res.ok || res.status === 404) return;
+      const body = await res.json().catch(() => null);
+      throw new Error(res.status === 401 || res.status === 403 ? 'ImgLink says the key is invalid' : body?.error || `HTTP ${res.status}`);
+    },
+    // Only uploads made with the API key can be deleted, by anyone.
+    canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
+    async remove(entry, s) {
+      const id = entry.url.split('/').pop().replace(/\.[^.]*$/, ''); // https://imglink.cc/cdn/<id>.<ext>
+      const res = await fetch(`https://imglink.cc/api/v1/image/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'x-api-key': s.imglinkApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok && res.status !== 404) throw new Error(body?.error || `HTTP ${res.status}`); // 404: already gone
+    },
+    parse(status, text) {
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      const url = body?.url || body?.images?.[0]?.url;
+      if (status >= 200 && status < 300 && /^https:\/\//i.test(url ?? '')) return url;
+      const why = body?.error || body?.message || text.trim().slice(0, 200) || `HTTP ${status}`;
+      if (status === 401 || status === 403) throw new Error(`ImgLink refused the API key: ${why}`);
+      if (status === 413) throw new Error('Too large for ImgLink (25 MB anonymously, 50 MB with your API key), or your ImgLink storage is full.');
+      if (status === 429) throw new Error('ImgLink upload limit reached; try again later.');
+      throw new Error(`ImgLink: ${why}`);
+    },
+  },
   x02: {
     name: 'x02',
     icon: '/icons/uploads/x02.png',
@@ -139,67 +194,17 @@ export const UPLOADERS = {
       throw new Error(`Catbox: ${t.slice(0, 200) || `HTTP ${status}`}`);
     },
   },
-  imglink: {
-    name: 'ImgLink',
-    icon: '/icons/uploads/imglink.png',
-    maxBytes: 50 * MB,
-    accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
-    rules: 'Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to 50 MB. Unlisted: only people with the link see them.',
-    ready: () => true,
-    hasAccount: (s) => Boolean(s.imglinkApiKey?.trim()),
-    mode: (s) => (s.imglinkApiKey?.trim() ? 'Uploading to your ImgLink account.' : 'Anonymous uploads. Add your API key to use your account.'),
-    request(file, s) {
-      const key = s.imglinkApiKey?.trim();
-      const form = new FormData();
-      form.append('visibility', 'private');
-      form.append('file', file, file.name);
-      return { url: key ? 'https://imglink.cc/api/v1/upload' : 'https://imglink.cc/api/upload', headers: key ? { 'x-api-key': key } : {}, form };
-    },
-    // ImgLink can't fetch a link; this hands over to downloading it here.
-    async fromUrl() {
-      throw new Error("ImgLink can't fetch links itself.");
-    },
-    // Asks to change an image that doesn't exist: a good key gets "not found",
-    // a bad one 401. Nothing is uploaded or changed.
-    async verify(key) {
-      const res = await fetch('https://imglink.cc/api/v1/image/keyCheck0', {
-        method: 'PATCH',
-        headers: { 'x-api-key': key, 'content-type': 'application/json' },
-        body: JSON.stringify({ nsfw: false }),
-      });
-      if (res.ok || res.status === 404) return;
-      const body = await res.json().catch(() => null);
-      throw new Error(res.status === 401 || res.status === 403 ? 'ImgLink says the key is invalid' : body?.error || `HTTP ${res.status}`);
-    },
-    // Only uploads made with the API key can be deleted, by anyone.
-    canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
-    async remove(entry, s) {
-      const id = entry.url.split('/').pop().replace(/\.[^.]*$/, ''); // https://imglink.cc/cdn/<id>.<ext>
-      const res = await fetch(`https://imglink.cc/api/v1/image/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'x-api-key': s.imglinkApiKey.trim() } });
-      const body = await res.json().catch(() => null);
-      if (!res.ok && res.status !== 404) throw new Error(body?.error || `HTTP ${res.status}`); // 404: already gone
-    },
-    parse(status, text) {
-      let body = null;
-      try {
-        body = JSON.parse(text);
-      } catch {}
-      const url = body?.url || body?.images?.[0]?.url;
-      if (status >= 200 && status < 300 && /^https:\/\//i.test(url ?? '')) return url;
-      const why = body?.error || body?.message || text.trim().slice(0, 200) || `HTTP ${status}`;
-      if (status === 401 || status === 403) throw new Error(`ImgLink refused the API key: ${why}`);
-      if (status === 413) throw new Error('Too large for ImgLink, or your ImgLink storage is full.');
-      if (status === 429) throw new Error('ImgLink upload limit reached; try again later.');
-      throw new Error(`ImgLink: ${why}`);
-    },
-  },
 };
 
+// A service's size limit, which may depend on the settings (ImgLink).
+const maxBytesOf = (u, s) => (typeof u.maxBytes === 'function' ? u.maxBytes(s) : u.maxBytes);
+
 // Why a file can't go to this service, or null.
-export function refuse(service, file) {
+export function refuse(service, file, settings) {
   const u = UPLOADERS[service];
+  const maxBytes = maxBytesOf(u, settings);
   if (u.blocked?.test(file.name) || (u.accepts && !u.accepts.test(file.name))) return `${u.name} doesn't accept this type of file.`;
-  if (file.size > u.maxBytes) return `Larger than ${u.name}'s ${Math.round(u.maxBytes / MB)} MB limit.`;
+  if (file.size > maxBytes) return `Larger than ${u.name}'s ${Math.round(maxBytes / MB)} MB limit.`;
   if (!file.size) return 'The file is empty.';
   return null;
 }
@@ -472,7 +477,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         <div class="up-drop${u.ready(s) ? '' : ' disabled'}" data-u="choose" role="button" tabindex="0">
           ${ICON.upload}
           <p><strong>Drop files anywhere here</strong><br>or click to choose files, or paste a copied image or link (⌘V)</p>
-          <p class="up-rules">${esc(u.rules)}</p>
+          <p class="up-rules">${esc(typeof u.rules === 'function' ? u.rules(s) : u.rules)}</p>
           <input type="file" multiple hidden>
         </div>
         ${active[svc].length ? `<ul class="up-list">${active[svc].map(activeRowHtml).join('')}</ul>` : ''}
@@ -508,7 +513,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   // One upload each: a file, or a web address the service fetches itself
   // (with, for a pasted image, the pasted picture to fall back on).
   const fileJob = (f) => ({
-    name: f.name, size: f.size, check: (svc) => refuse(svc, f),
+    name: f.name, size: f.size, check: (svc, s) => refuse(svc, f, s),
     preview: IMAGE_EXT.test(f.name) && f.size < 50 * MB ? URL.createObjectURL(f) : null,
     run: (svc, s, options, onProgress) => uploadFile(svc, f, s, options, onProgress).then((url) => ({ url, thumbFrom: f })),
   });
@@ -556,7 +561,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     row.status = 'Downloading from the website…';
     onProgress(null);
     const file = await downloadHere(address, name);
-    const refused = refuse(svc, file);
+    const refused = refuse(svc, file, s);
     if (refused) throw new Error(refused);
     row.name = file.name;
     row.size = file.size;
@@ -579,7 +584,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const svc = service;
     const s = getSettings();
     if (!svc || !UPLOADERS[svc].ready(s) || !jobs.length) return;
-    const rows = jobs.map((j) => ({ id: nextId++, job: j, name: j.name, size: j.size, source: j.source, preview: j.preview, progress: 0, error: j.check(svc) }));
+    const rows = jobs.map((j) => ({ id: nextId++, job: j, name: j.name, size: j.size, source: j.source, preview: j.preview, progress: 0, error: j.check(svc, s) }));
     active[svc].unshift(...rows); // newest drop first, in the order dropped
     await render();
     const options = { expiry: svc === 'x02' ? expiry : '' };
