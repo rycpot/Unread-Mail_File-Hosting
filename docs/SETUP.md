@@ -300,7 +300,7 @@ mark anything read.
 ## 11. Uploading files (Catbox, x02, ImgLink)
 
 The three icons above **+** in the left rail upload files and give you links to
-share: **x02** (top), **Catbox** and **ImgLink**. Click one and the email area becomes a drop
+share: **ImgLink** (top), **x02** and **Catbox**. Click one and the email area becomes a drop
 zone: drop files anywhere on it, or click it to choose files. You can also paste
 (⌘V): right-click an image on any web page → **Copy image**, then paste in the
 panel. The service fetches the original file from its address (keeping its format,
@@ -335,7 +335,7 @@ same icon closes the panel and brings the email back.
   API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
   (1 hour to 30 days). The trash icon deletes a file from your x02 account.
 - **ImgLink:** images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to
-  50 MB. Every upload is sent as private, so it is never in ImgLink's public
+  25 MB anonymously or 50 MB with an API key. Every upload is sent as private, so it is never in ImgLink's public
   gallery or search. Uploads are anonymous unless you add an API key (imglink.cc →
   Dashboard → API Keys) in **Settings → Uploads → ImgLink API key**. Files uploaded
   with the key can be deleted from the list (trash icon); anonymous uploads can't be.
