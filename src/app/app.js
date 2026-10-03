@@ -1457,7 +1457,33 @@ $('settingsMenu').addEventListener('click', (e) => {
   const tip = e.target.closest('.help-tip');
   const wasOpen = tip?.classList.contains('open');
   closeHelpTips();
-  if (tip && !wasOpen) tip.classList.add('open');
+  if (tip && !wasOpen) {
+    tip.classList.add('open');
+    placeHelpTip(tip);
+  }
+});
+// The ? tips are placed in the window (fixed), clear of its edges, so they are
+// never cut off by the side or bottom of the app tab.
+function placeHelpTip(tip) {
+  const pop = tip.querySelector('.help-pop');
+  if (!pop) return;
+  pop.style.left = '0px';
+  pop.style.top = '0px';
+  const r = tip.getBoundingClientRect();
+  const { width, height } = pop.getBoundingClientRect();
+  const margin = 8;
+  const left = Math.min(Math.max(margin, r.left - 12), innerWidth - width - margin);
+  const below = r.bottom + 6;
+  const top = below + height + margin <= innerHeight ? below : Math.max(margin, r.top - 6 - height);
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+}
+$('settingsMenu').addEventListener('mouseover', (e) => {
+  const tip = e.target.closest('.help-tip');
+  if (tip && !e.target.closest('.help-pop')) placeHelpTip(tip);
+});
+$('settingsMenu').addEventListener('focusin', (e) => {
+  if (e.target.matches('.help-tip')) placeHelpTip(e.target);
 });
 function closeHelpTips() {
   document.querySelectorAll('.help-tip.open').forEach((t) => t.classList.remove('open'));
@@ -1497,9 +1523,45 @@ async function showCacheUsage() {
   $('cacheUsage').textContent = `${size} used · ${emails} ${emails === 1 ? 'email' : 'emails'}, ${files} ${files === 1 ? 'file' : 'files'}`;
 }
 $('senderName').addEventListener('change', (e) => saveSettings({ senderName: e.target.value.trim() }));
-$('catboxUserhash').addEventListener('change', (e) => saveSettings({ catboxUserhash: e.target.value.trim() }));
-$('x02ApiKey').addEventListener('change', (e) => saveSettings({ x02ApiKey: e.target.value.trim() }));
-$('imglinkApiKey').addEventListener('change', (e) => saveSettings({ imglinkApiKey: e.target.value.trim() }));
+// Upload keys: saved on change, then checked with the service where it has a
+// way to (x02, ImgLink; Catbox has none), with the result shown in the field
+// for a few seconds.
+for (const [id, service] of [['catboxUserhash', 'catbox'], ['x02ApiKey', 'x02'], ['imglinkApiKey', 'imglink']]) {
+  const input = $(id);
+  const status = input.parentElement.querySelector('.key-status');
+  let seq = 0;
+  let timer;
+  const show = (text, kind, ms) => {
+    clearTimeout(timer);
+    status.textContent = text;
+    status.className = `key-status ${kind}`;
+    status.hidden = false;
+    if (ms) timer = setTimeout(() => (status.hidden = true), ms);
+  };
+  input.addEventListener('input', () => {
+    seq++;
+    input.title = '';
+    clearTimeout(timer);
+    status.hidden = true;
+  });
+  input.addEventListener('change', async () => {
+    const key = input.value.trim();
+    const mine = ++seq;
+    await saveSettings({ [id]: key });
+    if (!key) return show('Cleared', 'ok', 2500);
+    const verify = UPLOADERS[service].verify;
+    if (!verify) return show('✓ Saved', 'ok', 3000);
+    show('Checking…', 'busy');
+    try {
+      await verify(key);
+      if (mine === seq) show('✓ Verified', 'ok', 4000);
+    } catch (e) {
+      if (mine !== seq) return;
+      show(`✕ ${/fetch/i.test(e.message) ? `Couldn't reach ${UPLOADERS[service].name}` : 'Not accepted'}`, 'bad', 6000);
+      input.title = e.message; // the details, on hover
+    }
+  });
+}
 
 // ---------- file uploads (Catbox, x02, ImgLink) ----------
 

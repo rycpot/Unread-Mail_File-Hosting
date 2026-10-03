@@ -181,11 +181,15 @@ label.s-row { cursor: pointer; }
 .help-tip.open { border-color: var(--accent); color: var(--accent); }
 .help-pop {
   display: none;
-  position: absolute;
-  left: -12px;
-  top: 21px;
-  z-index: 5;
+  /* Placed by placeHelpTip() in app.js, kept inside the window. */
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 30;
   width: 230px;
+  max-width: calc(100vw - 16px);
+  white-space: normal;
+  overflow-wrap: break-word;
   padding: 8px 10px;
   font: 400 11.5px/1.45 system-ui, sans-serif;
   text-align: left;
@@ -196,7 +200,32 @@ label.s-row { cursor: pointer; }
   box-shadow: var(--shadow);
   cursor: default;
 }
-.help-tip:hover .help-pop, .help-tip.open .help-pop { display: block; }
+.help-tip:hover .help-pop, .help-tip.open .help-pop, .help-tip:focus-visible .help-pop { display: block; }
+/* Upload keys: the check result shows inside the field for a few seconds. */
+.key-field { position: relative; display: inline-flex; flex: none; }
+.key-status {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  max-width: calc(100% - 8px);
+  padding: 1px 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.key-status.ok { color: #1a7f37; background: color-mix(in srgb, #1a7f37 14%, var(--surface)); }
+.key-status.bad { color: #cf222e; background: color-mix(in srgb, #cf222e 14%, var(--surface)); }
+@media (prefers-color-scheme: dark) {
+  .key-status.ok { color: #3fb950; }
+  .key-status.bad { color: #f85149; }
+}
 .s-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; font-size: 12px; color: var(--text-2); border-bottom: 1px solid var(--border); }
 .s-advanced summary { display: flex; justify-content: space-between; padding: 9px 14px; font-size: 12px; color: var(--text-2); cursor: pointer; list-style: none; user-select: none; }
 .s-advanced summary::-webkit-details-marker { display: none; }
