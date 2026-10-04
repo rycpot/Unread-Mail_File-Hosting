@@ -27,8 +27,8 @@ Trash or Deleted Items), without opening the webmail site.
   with no Proton tab opened.
 - **File uploads** to Catbox, x02 and ImgLink: the icons above **+** in the left rail open a
   drop zone (or paste a copied image, link or screenshot with ⌘V); each file gets a link that is shown and copied to the clipboard. The
-  last 100 uploads are listed with previews, dates and delete (x02's list comes
-  from the account).
+  last 100 uploads are listed with previews, dates and delete (x02's and, with
+  its API key, ImgLink's list come from the account).
 - **Offline cache**: every email the app lists (unread, Recently read, Sent,
   Drafts, Spam) is downloaded in the background with its images and attachments,
   so it opens instantly. Stored on this computer, 1 GB by default (Settings).

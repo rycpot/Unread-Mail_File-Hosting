@@ -15,8 +15,10 @@
 // account), or https://imglink.cc/api/upload without one (anonymous); one
 // "file" field plus visibility=private, so uploads are never in
 // its public gallery. The reply is { success, id, url, … } or { error }.
-// Images only, 50 MB. It can't fetch a link itself and has no list of an
-// account's uploads; only uploads made with the key can be deleted.
+// Images only: 25 MB anonymously, 50 MB with the key. It can't fetch a link
+// itself. With the key, GET /api/v1/images lists the account's uploads (website
+// ones too) and GET /api/v1/me reports storage and the hourly upload window;
+// only uploads made with the key can be deleted.
 
 import { fmtDateTime } from './format.js';
 import { openViewer } from './viewer.js';
@@ -60,10 +62,39 @@ export const UPLOADERS = {
       const body = await res.json().catch(() => null);
       throw new Error(res.status === 401 || res.status === 403 ? 'ImgLink says the key is invalid' : body?.error || `HTTP ${res.status}`);
     },
+    // The account's latest uploads, including ones made on the website.
+    async list(s) {
+      const res = await fetch(`https://imglink.cc/api/v1/images?page=1&limit=${HISTORY_MAX}`, { headers: { 'x-api-key': s.imglinkApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
+      return (body?.images ?? []).slice(0, HISTORY_MAX).map((f) => ({
+        url: f.url,
+        name: f.filename || f.url.split('/').pop(),
+        id: f.id,
+        size: f.size ?? 0,
+        at: Date.parse(f.created_at) || 0,
+        account: true,
+      }));
+    },
+    // Storage and the hourly upload window (null = unlimited).
+    async usage(s) {
+      const res = await fetch('https://imglink.cc/api/v1/me', { headers: { 'x-api-key': s.imglinkApiKey.trim() } });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
+      const parts = [];
+      const { used, limit } = body?.storage ?? {};
+      if (Number.isFinite(used)) parts.push(`${formatSize(used)}${Number.isFinite(limit) ? ` of ${formatSize(limit)}` : ''} used`);
+      const rl = body?.rateLimit;
+      if (Number.isFinite(rl?.remaining) && Number.isFinite(rl?.limit)) {
+        const mins = Math.ceil((rl.resetSeconds ?? 0) / 60);
+        parts.push(`${rl.remaining} of ${rl.limit} uploads left this hour${rl.remaining < rl.limit && mins ? ` (resets in ${mins} min)` : ''}`);
+      }
+      return parts.join(' · ');
+    },
     // Only uploads made with the API key can be deleted, by anyone.
     canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
     async remove(entry, s) {
-      const id = entry.url.split('/').pop().replace(/\.[^.]*$/, ''); // https://imglink.cc/cdn/<id>.<ext>
+      const id = entry.id || entry.url.split('/').pop().replace(/\.[^.]*$/, ''); // https://imglink.cc/cdn/<id>.<ext>
       const res = await fetch(`https://imglink.cc/api/v1/image/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'x-api-key': s.imglinkApiKey.trim() } });
       const body = await res.json().catch(() => null);
       if (!res.ok && res.status !== 404) throw new Error(body?.error || `HTTP ${res.status}`); // 404: already gone
@@ -246,7 +277,7 @@ async function addToHistory(service, entries) {
 
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const formatSize = (n) => (n < 1024 ? `${n} B` : n < MB ? `${Math.round(n / 1024)} KB` : `${(n / MB).toFixed(1)} MB`);
+const formatSize = (n) => (n < 1024 ? `${n} B` : n < MB ? `${Math.round(n / 1024)} KB` : n < 1024 * MB ? `${(n / MB).toFixed(1)} MB` : `${(n / (1024 * MB)).toFixed(1)} GB`);
 const ICON = {
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M20 16v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3"/></svg>',
   open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 10 14"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
@@ -361,7 +392,9 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   let service = null;
   const active = Object.fromEntries(Object.keys(UPLOADERS).map((k) => [k, []])); // uploads still running or failed in this tab
   const fresh = new Set(); // links uploaded in this tab (highlighted)
-  const remote = { x02: null }; // the account's list as last fetched: { entries } | { error }
+  const remote = {}; // per service, the account's list as last fetched: { entries, usage } | { error }
+  // Services that list the account's uploads (x02; ImgLink with its key).
+  const hasRemote = (svc) => Boolean(UPLOADERS[svc].list && UPLOADERS[svc].hasAccount(getSettings()));
   let expiry = '';
   let shown = []; // the Recent uploads list on screen
 
@@ -422,13 +455,13 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       <span class="up-result">${rowActions(e, UPLOADERS[service].canDelete(s, e))}</span></li>`;
   }
 
-  // The list under "Recent uploads": x02's comes from the account (so it
-  // includes uploads made elsewhere); Catbox and ImgLink have no such list, so
-  // it is the uploads made here.
+  // The list under "Recent uploads": x02's, and ImgLink's with its key, come
+  // from the account (so they include uploads made elsewhere); Catbox has no
+  // such list, so it is the uploads made here.
   async function entries(svc) {
     const local = ((await readHistory())[svc] ?? []).slice(0, HISTORY_MAX);
-    if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return { list: local };
-    const r = remote.x02;
+    if (!hasRemote(svc)) return { list: local };
+    const r = remote[svc];
     if (!r) return { list: local, loading: true };
     if (r.error) return { list: local, error: r.error };
     // Keep what we know locally (expiry) for the same links, and show this
@@ -440,12 +473,14 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   }
 
   async function fetchRemote(svc) {
-    if (svc !== 'x02' || !UPLOADERS.x02.ready(getSettings())) return;
-    try {
-      remote.x02 = { entries: await UPLOADERS.x02.list(getSettings()) };
-    } catch (e) {
-      remote.x02 = { ...(remote.x02 ?? {}), error: e.message };
-    }
+    if (!hasRemote(svc)) return;
+    const u = UPLOADERS[svc];
+    const s = getSettings();
+    // The usage line is optional: without it the list still shows.
+    const [list, usage] = await Promise.allSettled([u.list(s), u.usage ? u.usage(s) : Promise.resolve('')]);
+    remote[svc] = list.status === 'fulfilled'
+      ? { entries: list.value, usage: usage.value ?? '' }
+      : { ...(remote[svc] ?? {}), error: list.reason?.message ?? String(list.reason) };
     if (service === svc) render();
   }
 
@@ -460,15 +495,17 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const { list, loading, error } = await entries(svc);
     if (seq !== renderSeq || svc !== service) return;
     shown = list;
-    const note = loading ? '<p class="up-empty">Loading your x02 uploads…</p>'
-      : error ? `<p class="up-empty error">Couldn't load your x02 uploads (${esc(error)}). Showing the ones made here.</p>` : '';
+    const fromAccount = hasRemote(svc);
+    const note = loading ? `<p class="up-empty">Loading your ${u.name} uploads…</p>`
+      : error ? `<p class="up-empty error">Couldn't load your ${u.name} uploads (${esc(error)}). Showing the ones made here.</p>` : '';
     const listHtml = list.length ? `<ul class="up-list">${list.map((e) => entryRowHtml(e, s)).join('')}</ul>`
-      : loading ? '' : `<p class="up-empty">${svc === 'x02' ? 'No uploads yet.' : 'Links you upload here stay listed (the last 100).'}</p>`;
+      : loading ? '' : `<p class="up-empty">${fromAccount ? 'No uploads yet.' : 'Links you upload here stay listed (the last 100).'}</p>`;
+    const usage = fromAccount ? remote[svc]?.usage : '';
     panel.innerHTML = `
       <div class="up-panel" data-service="${svc}">
         <header class="up-head">
           <img class="up-logo" src="${u.icon}" alt="">
-          <div class="up-titles"><h2>Upload to ${u.name}</h2><p class="up-mode">${esc(u.mode(s))}${u.hasAccount(s) ? '' : ' <button type="button" class="link-btn" data-u="settings">Settings</button>'}</p></div>
+          <div class="up-titles"><h2>Upload to ${u.name}</h2><p class="up-mode">${esc(u.mode(s))}${u.hasAccount(s) ? '' : ' <button type="button" class="link-btn" data-u="settings">Settings</button>'}</p>${usage ? `<p class="up-usage">${esc(usage)}</p>` : ''}</div>
           ${svc === 'x02' ? `<label class="up-expiry">Delete after <select data-u="expiry">
             ${[['', 'Never'], ['1h', '1 hour'], ['6h', '6 hours'], ['1d', '1 day'], ['7d', '7 days'], ['30d', '30 days']].map(([v, t]) => `<option value="${v}"${v === expiry ? ' selected' : ''}>${t}</option>`).join('')}
           </select></label>` : ''}
@@ -483,7 +520,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         ${active[svc].length ? `<ul class="up-list">${active[svc].map(activeRowHtml).join('')}</ul>` : ''}
         <section class="up-history">
           <h3>Recent uploads
-            ${svc === 'x02' && u.ready(s) ? `<button type="button" class="up-icon small" data-u="refresh" title="Reload from x02">${ICON.refresh}</button>`
+            ${fromAccount ? `<button type="button" class="up-icon small" data-u="refresh" title="Reload from ${u.name}">${ICON.refresh}</button>`
               : ''}
           </h3>
           ${note}${listHtml}
@@ -722,9 +759,10 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     else if (act === 'view') view(el.dataset.url);
     else if (act === 'delete') removeEntry(el.dataset.url);
     else if (act === 'refresh') {
-      remote.x02 = null;
+      const svc = service;
+      remote[svc] = null;
       render();
-      fetchRemote('x02');
+      fetchRemote(svc);
     } else if (act === 'download-here') {
       const row = active[service].find((r) => String(r.id) === el.dataset.row);
       if (!row?.retryHere) return;
@@ -795,7 +833,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     reader.hidden = true;
     panel.hidden = false;
     render();
-    fetchRemote(svc); // the x02 list may have changed on the website
+    fetchRemote(svc); // the account's list may have changed on the website
     onToggle(service);
   }
   function close() {
@@ -812,7 +850,7 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     current: () => service,
     refresh: () => {
       if (!service) return;
-      remote.x02 = null; // the key may have changed
+      for (const k of Object.keys(remote)) remote[k] = null; // a key may have changed
       render();
       fetchRemote(service);
     },
