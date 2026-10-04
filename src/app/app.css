@@ -1046,12 +1046,17 @@ label.s-row { cursor: pointer; }
   pointer-events: none;
 }
 .up-panel { display: flex; flex-direction: column; gap: 18px; width: min(1040px, 100%); margin: 0 auto; padding: 22px 26px 30px; box-sizing: border-box; }
-.up-head { display: flex; align-items: center; gap: 12px; }
+.up-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .up-logo { width: 40px; height: 40px; border-radius: 10px; flex: none; }
 .up-titles { flex: 1; min-width: 0; }
 .up-titles h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .up-mode { margin: 2px 0 0; font-size: 12.5px; color: var(--text-2); }
-.up-usage { margin: 2px 0 0; font-size: 11.5px; color: var(--text-3); }
+.up-usage { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 6px 24px; margin: -4px 0 0; padding-left: 52px; } /* under the title (logo 40 + gap 12) */
+.up-meter { width: 190px; }
+.up-meter-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.up-meter-row b { font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.up-meter-bar { height: 3px; margin-top: 4px; overflow: hidden; border-radius: 2px; background: var(--surface-2); }
+.up-meter-bar i { display: block; height: 100%; border-radius: 2px; background: var(--meter); }
 .up-expiry { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
 .up-expiry select { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 .up-close { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--text-2); cursor: pointer; flex: none; }

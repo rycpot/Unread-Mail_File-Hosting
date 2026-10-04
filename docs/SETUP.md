@@ -334,14 +334,16 @@ same icon closes the panel and brings the email back.
   userhash can be deleted from the list (trash icon); anonymous uploads can't be.
 - **x02:** needs an API key from the x02 dashboard, in **Settings → Uploads → x02
   API key**. Up to 200 MB (512 MB on Pro). **Delete after** can make a link expire
-  (1 hour to 30 days). The trash icon deletes a file from your x02 account.
+  (1 hour to 30 days). The trash icon deletes a file from your x02 account. Two small
+  meters under the title show your storage (used / limit) and today's uploads against
+  your plan's daily limit.
 - **ImgLink:** images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to
   25 MB anonymously or 50 MB with an API key. Every upload is sent as private, so it is never in ImgLink's public
   gallery or search. Uploads are anonymous unless you add an API key (imglink.cc →
   Dashboard → API Keys) in **Settings → Uploads → ImgLink API key**. Files uploaded
   with the key can be deleted from the list (trash icon); anonymous uploads can't be.
-  With the key, the panel also shows your ImgLink storage (used of limit) and how
-  many uploads are left this hour (website and app uploads share 100 an hour).
+  With the key, the panel also shows two small meters: your ImgLink storage (used /
+  limit) and uploads this hour (website and app uploads share 100 an hour).
 - Uploaded files are public to anyone with the link. The userhash and API keys are
   kept in this Chrome profile and only sent to catbox.moe, up.x02.me and imglink.cc.
 - Keep the app tab open until uploads finish (Chrome warns if you close it).
