@@ -32,6 +32,7 @@ export const UPLOADERS = {
   imglink: {
     name: 'ImgLink',
     icon: '/icons/uploads/imglink.png',
+    color: '#2584f0', // from the logo, for the usage bars
     // 25 MB per file anonymously, 50 MB with the key.
     maxBytes: (s) => (s.imglinkApiKey?.trim() ? 50 : 25) * MB,
     accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
@@ -81,15 +82,12 @@ export const UPLOADERS = {
       const res = await fetch('https://imglink.cc/api/v1/me', { headers: { 'x-api-key': s.imglinkApiKey.trim() } });
       const body = await res.json().catch(() => null);
       if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
-      const parts = [];
-      const { used, limit } = body?.storage ?? {};
-      if (Number.isFinite(used)) parts.push(`${formatSize(used)}${Number.isFinite(limit) ? ` of ${formatSize(limit)}` : ''} used`);
       const rl = body?.rateLimit;
-      if (Number.isFinite(rl?.remaining) && Number.isFinite(rl?.limit)) {
-        const mins = Math.ceil((rl.resetSeconds ?? 0) / 60);
-        parts.push(`${rl.remaining} of ${rl.limit} uploads left this hour${rl.remaining < rl.limit && mins ? ` (resets in ${mins} min)` : ''}`);
-      }
-      return parts.join(' · ');
+      const mins = Math.ceil((rl?.resetSeconds ?? 0) / 60);
+      return [
+        storageMeter(body?.storage?.used, body?.storage?.limit),
+        countMeter('This hour', rl?.used, rl?.limit, rl?.used && mins ? `Resets in ${mins} min` : ''),
+      ].filter(Boolean);
     },
     // Only uploads made with the API key can be deleted, by anyone.
     canDelete: (s, entry) => Boolean(s.imglinkApiKey?.trim() && entry.account),
@@ -116,6 +114,7 @@ export const UPLOADERS = {
   x02: {
     name: 'x02',
     icon: '/icons/uploads/x02.png',
+    color: '#e05048', // from the logo, for the usage bars
     maxBytes: 512 * MB,
     rules: 'One link per file. Up to 200 MB (512 MB on Pro).',
     ready: (s) => Boolean(s.x02ApiKey?.trim()),
@@ -148,21 +147,33 @@ export const UPLOADERS = {
         const body = await res.json().catch(() => null);
         if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
         uploads.push(...(body.data?.uploads ?? []));
+        if (page === 1) uploads.user = body.data?.user; // for usage()
         if (!body.data?.pagination?.hasNextPage || !body.data?.uploads?.length) break;
       }
-      return uploads.slice(0, HISTORY_MAX).map((f) => ({
+      const list = uploads.slice(0, HISTORY_MAX).map((f) => ({
         url: f.url,
         name: f.originalName || f.filename,
         stored: f.filename,
         size: f.size ?? 0,
         at: Date.parse(f.timestamp) || 0,
       }));
+      list.user = uploads.user;
+      return list;
     },
     // The account summary answers 401 to a key x02 doesn't know.
     async verify(key) {
       const res = await fetch('https://up.x02.me/api/user/dashboard?page=1&limit=1', { headers: { 'x-api-key': key } });
       const body = await res.json().catch(() => null);
       if (!res.ok || body?.success === false) throw new Error(body?.error || `HTTP ${res.status}`);
+    },
+    // Storage and today's uploads, from the account summary list() already
+    // read (not in x02's published API, so a missing number drops its meter).
+    async usage(s, listing) {
+      const user = (await listing)?.user ?? {};
+      return [
+        storageMeter(num(user.usage?.monthlyStorageUsed), num(user.limits?.monthlyStorageLimit)),
+        countMeter('Today', num(user.usage?.todayCount), num(user.limits?.dailyLimit)),
+      ].filter(Boolean);
     },
     canDelete: (s) => Boolean(s.x02ApiKey?.trim()),
     async remove(entry, s) {
@@ -226,6 +237,19 @@ export const UPLOADERS = {
     },
   },
 };
+
+// Usage meters for the panel header: { label, value, pct, title }. A meter is
+// left out when the service doesn't give its numbers; unlimited shows no bar.
+const num = (v) => (v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+function storageMeter(used, limit) {
+  if (!Number.isFinite(used)) return null;
+  const pct = Number.isFinite(limit) && limit > 0 ? (used / limit) * 100 : null;
+  return { label: 'Storage', value: `${formatSize(used)} / ${Number.isFinite(limit) ? formatSize(limit) : 'unlimited'}`, pct, title: pct == null ? '' : `${pct.toFixed(1)}% used` };
+}
+function countMeter(label, used, limit, title = '') {
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return null;
+  return { label, value: `${used} / ${limit} uploads`, pct: (used / limit) * 100, title };
+}
 
 // A service's size limit, which may depend on the settings (ImgLink).
 const maxBytesOf = (u, s) => (typeof u.maxBytes === 'function' ? u.maxBytes(s) : u.maxBytes);
@@ -477,9 +501,10 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     const u = UPLOADERS[svc];
     const s = getSettings();
     // The usage line is optional: without it the list still shows.
-    const [list, usage] = await Promise.allSettled([u.list(s), u.usage ? u.usage(s) : Promise.resolve('')]);
+    const listing = u.list(s);
+    const [list, usage] = await Promise.allSettled([listing, u.usage ? u.usage(s, listing) : Promise.resolve([])]);
     remote[svc] = list.status === 'fulfilled'
-      ? { entries: list.value, usage: usage.value ?? '' }
+      ? { entries: list.value, usage: usage.value ?? [] }
       : { ...(remote[svc] ?? {}), error: list.reason?.message ?? String(list.reason) };
     if (service === svc) render();
   }
@@ -500,16 +525,20 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
       : error ? `<p class="up-empty error">Couldn't load your ${u.name} uploads (${esc(error)}). Showing the ones made here.</p>` : '';
     const listHtml = list.length ? `<ul class="up-list">${list.map((e) => entryRowHtml(e, s)).join('')}</ul>`
       : loading ? '' : `<p class="up-empty">${fromAccount ? 'No uploads yet.' : 'Links you upload here stay listed (the last 100).'}</p>`;
-    const usage = fromAccount ? remote[svc]?.usage : '';
+    const meters = (fromAccount && remote[svc]?.usage) || [];
+    const usage = meters.length ? `<div class="up-usage" style="--meter:${u.color ?? 'var(--accent)'}">${meters.map((m) => `
+      <div class="up-meter"${m.title ? ` title="${esc(m.title)}"` : ''}><div class="up-meter-row"><span>${esc(m.label)}</span><b>${esc(m.value)}</b></div>
+        ${m.pct == null ? '' : `<div class="up-meter-bar"><i style="width:${Math.min(100, Math.max(m.pct, 1.5)).toFixed(1)}%"></i></div>`}</div>`).join('')}</div>` : '';
     panel.innerHTML = `
       <div class="up-panel" data-service="${svc}">
         <header class="up-head">
           <img class="up-logo" src="${u.icon}" alt="">
-          <div class="up-titles"><h2>Upload to ${u.name}</h2><p class="up-mode">${esc(u.mode(s))}${u.hasAccount(s) ? '' : ' <button type="button" class="link-btn" data-u="settings">Settings</button>'}</p>${usage ? `<p class="up-usage">${esc(usage)}</p>` : ''}</div>
+          <div class="up-titles"><h2>Upload to ${u.name}</h2><p class="up-mode">${esc(u.mode(s))}${u.hasAccount(s) ? '' : ' <button type="button" class="link-btn" data-u="settings">Settings</button>'}</p></div>
           ${svc === 'x02' ? `<label class="up-expiry">Delete after <select data-u="expiry">
             ${[['', 'Never'], ['1h', '1 hour'], ['6h', '6 hours'], ['1d', '1 day'], ['7d', '7 days'], ['30d', '30 days']].map(([v, t]) => `<option value="${v}"${v === expiry ? ' selected' : ''}>${t}</option>`).join('')}
           </select></label>` : ''}
           <button type="button" class="up-close" data-u="close" title="Close (Esc)">${ICON.close}</button>
+          ${usage}
         </header>
         <div class="up-drop${u.ready(s) ? '' : ' disabled'}" data-u="choose" role="button" tabindex="0">
           ${ICON.upload}
