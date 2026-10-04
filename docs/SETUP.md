@@ -321,8 +321,9 @@ open the file in the app's viewer (← / → move through the list, Esc closes i
 arrow icon opens it in a new tab instead.
 **Recent uploads** lists the last 100 with a preview (the image itself, or a tile
 with the file type), size, and date and time. For x02 the list comes from your
-account, so it also shows files uploaded on the x02 website; for Catbox and ImgLink
-it lists the uploads made from here (they have no way to list them). Image previews are
+account, so it also shows files uploaded on the x02 website; the same goes for
+ImgLink once its API key is set. For Catbox, and ImgLink without a key, it lists the
+uploads made from here (there is no way to list them). Image previews are
 small thumbnails kept on this computer: made from your file when you upload, or
 from one download of the image otherwise, so they show at once afterwards. Esc, the ✕ or the
 same icon closes the panel and brings the email back.
@@ -339,6 +340,8 @@ same icon closes the panel and brings the email back.
   gallery or search. Uploads are anonymous unless you add an API key (imglink.cc →
   Dashboard → API Keys) in **Settings → Uploads → ImgLink API key**. Files uploaded
   with the key can be deleted from the list (trash icon); anonymous uploads can't be.
+  With the key, the panel also shows your ImgLink storage (used of limit) and how
+  many uploads are left this hour (website and app uploads share 100 an hour).
 - Uploaded files are public to anyone with the link. The userhash and API keys are
   kept in this Chrome profile and only sent to catbox.moe, up.x02.me and imglink.cc.
 - Keep the app tab open until uploads finish (Chrome warns if you close it).

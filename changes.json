@@ -1,4 +1,5 @@
 {
+  "0.14.0": "ImgLink with your API key: Recent uploads now comes from your ImgLink account (including uploads made on the website), every one can be deleted, and the panel shows your storage and uploads left this hour.",
   "0.13.2": "ImgLink: its icon is now the top one of the upload icons, and the size limit follows your setup: 25 MB per image anonymously, 50 MB with your API key.",
   "0.13.1": "Settings: the ? tips stay inside the window and wrap their text. Upload keys are checked when saved: x02 and ImgLink show Verified or Not accepted in the field for a few seconds (Catbox has no way to check a userhash, so it shows Saved).",
   "0.13.0": "ImgLink (imglink.cc) as a third file host: its icon sits below Catbox in the left rail. Images up to 50 MB, always unlisted. Works anonymously or with your API key in Settings → Uploads, which also lets you delete uploads from the list.",
