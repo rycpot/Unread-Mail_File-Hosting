@@ -36,7 +36,7 @@ export const UPLOADERS = {
     // 25 MB per file anonymously, 50 MB with the key.
     maxBytes: (s) => (s.imglinkApiKey?.trim() ? 50 : 25) * MB,
     accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
-    rules: (s) => `Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to ${s.imglinkApiKey?.trim() ? '50 MB' : '25 MB (50 MB with your API key); anonymously, 10 uploads per 10 minutes'}. Unlisted: only people with the link see them.`,
+    rules: (s) => `Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to ${s.imglinkApiKey?.trim() ? '50 MB' : '25 MB (50 MB with your API key). ImgLink may limit anonymous uploads (about 10 per 10 minutes)'}. Unlisted: only people with the link see them.`,
     ready: () => true,
     hasAccount: (s) => Boolean(s.imglinkApiKey?.trim()),
     mode: (s) => (s.imglinkApiKey?.trim() ? 'Uploading to your ImgLink account.' : 'Anonymous uploads. Add your API key to use your account.'),
@@ -113,7 +113,7 @@ export const UPLOADERS = {
         const wait = retrySeconds(body, header, why);
         const anon = !/\/api\/v1\//.test(this.lastUrl ?? '');
         const when = wait != null ? `Try again in ${minutesText(wait)}.` : anon ? 'Try again within 10 minutes.' : 'Try again within the hour.';
-        throw new Error(`ImgLink's upload limit reached (${anon ? '10 uploads per 10 minutes without an API key' : '100 uploads an hour'}). ${when}`);
+        throw new Error(`ImgLink's upload limit reached${anon ? ' (anonymous uploads)' : ' (100 uploads an hour)'}. ${when}`);
       }
       throw new Error(`ImgLink: ${why}`);
     },
