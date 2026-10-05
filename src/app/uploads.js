@@ -36,7 +36,7 @@ export const UPLOADERS = {
     // 25 MB per file anonymously, 50 MB with the key.
     maxBytes: (s) => (s.imglinkApiKey?.trim() ? 50 : 25) * MB,
     accepts: /\.(jpe?g|png|gif|webp|svg|bmp|ico|tiff?|avif)$/i,
-    rules: (s) => `Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to ${s.imglinkApiKey?.trim() ? '50 MB' : '25 MB (50 MB with your API key)'}. Unlisted: only people with the link see them.`,
+    rules: (s) => `Images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to ${s.imglinkApiKey?.trim() ? '50 MB' : '25 MB (50 MB with your API key); anonymously, 10 uploads per 10 minutes'}. Unlisted: only people with the link see them.`,
     ready: () => true,
     hasAccount: (s) => Boolean(s.imglinkApiKey?.trim()),
     mode: (s) => (s.imglinkApiKey?.trim() ? 'Uploading to your ImgLink account.' : 'Anonymous uploads. Add your API key to use your account.'),
@@ -45,7 +45,8 @@ export const UPLOADERS = {
       const form = new FormData();
       form.append('visibility', 'private');
       form.append('file', file, file.name);
-      return { url: key ? 'https://imglink.cc/api/v1/upload' : 'https://imglink.cc/api/upload', headers: key ? { 'x-api-key': key } : {}, form };
+      this.lastUrl = key ? 'https://imglink.cc/api/v1/upload' : 'https://imglink.cc/api/upload';
+      return { url: this.lastUrl, headers: key ? { 'x-api-key': key } : {}, form };
     },
     // ImgLink can't fetch a link; this hands over to downloading it here.
     async fromUrl() {
@@ -97,7 +98,7 @@ export const UPLOADERS = {
       const body = await res.json().catch(() => null);
       if (!res.ok && res.status !== 404) throw new Error(body?.error || `HTTP ${res.status}`); // 404: already gone
     },
-    parse(status, text) {
+    parse(status, text, header = () => null) {
       let body = null;
       try {
         body = JSON.parse(text);
@@ -107,7 +108,13 @@ export const UPLOADERS = {
       const why = body?.error || body?.message || text.trim().slice(0, 200) || `HTTP ${status}`;
       if (status === 401 || status === 403) throw new Error(`ImgLink refused the API key: ${why}`);
       if (status === 413) throw new Error('Too large for ImgLink (25 MB anonymously, 50 MB with your API key), or your ImgLink storage is full.');
-      if (status === 429) throw new Error('ImgLink upload limit reached; try again later.');
+      if (status === 429) {
+        // Anonymous: 10 uploads per 10 minutes per IP (rolling); with a key: 100 an hour.
+        const wait = retrySeconds(body, header, why);
+        const anon = !/\/api\/v1\//.test(this.lastUrl ?? '');
+        const when = wait != null ? `Try again in ${minutesText(wait)}.` : anon ? 'Try again within 10 minutes.' : 'Try again within the hour.';
+        throw new Error(`ImgLink's upload limit reached (${anon ? '10 uploads per 10 minutes without an API key' : '100 uploads an hour'}). ${when}`);
+      }
       throw new Error(`ImgLink: ${why}`);
     },
   },
@@ -251,6 +258,27 @@ function countMeter(label, used, limit, title = '') {
   return { label, value: `${used} / ${limit} uploads`, pct: (used / limit) * 100, title };
 }
 
+// How long a rate-limited service asks to wait, in seconds (null = not said):
+// from the reply (retryAfter, resetSeconds, …), a Retry-After or RateLimit-Reset
+// header, or the message itself ("try again in 7 minutes").
+function retrySeconds(body, header, message = '') {
+  const n = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  const fromBody = n(body?.retryAfter) ?? n(body?.retry_after) ?? n(body?.resetSeconds) ?? n(body?.rateLimit?.resetSeconds) ?? n(body?.resetIn);
+  if (fromBody != null) return fromBody;
+  const ra = header('Retry-After');
+  if (n(ra) != null) return n(ra);
+  if (ra && !Number.isNaN(Date.parse(ra))) return Math.max(0, (Date.parse(ra) - Date.now()) / 1000);
+  const reset = n(header('RateLimit-Reset') ?? header('X-RateLimit-Reset'));
+  if (reset != null) return reset > 1e9 ? Math.max(0, reset - Date.now() / 1000) : reset; // epoch or seconds
+  const m = /\b(?:in|after)\s+(\d+(?:\.\d+)?)\s*(second|sec|s\b|minute|min|hour|h\b)/i.exec(message); // not "10 per 10 minutes"
+  if (m) return Number(m[1]) * (/^h/i.test(m[2]) ? 3600 : /^m/i.test(m[2]) ? 60 : 1);
+  return null;
+}
+const minutesText = (seconds) => {
+  const mins = Math.max(1, Math.ceil(seconds / 60));
+  return `${mins} minute${mins === 1 ? '' : 's'}`;
+};
+
 // A service's size limit, which may depend on the settings (ImgLink).
 const maxBytesOf = (u, s) => (typeof u.maxBytes === 'function' ? u.maxBytes(s) : u.maxBytes);
 
@@ -275,7 +303,7 @@ export function uploadFile(service, file, settings, options = {}, onProgress = (
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
       try {
-        resolve(u.parse(xhr.status, xhr.responseText ?? ''));
+        resolve(u.parse(xhr.status, xhr.responseText ?? '', (name) => xhr.getResponseHeader(name)));
       } catch (e) {
         reject(e);
       }

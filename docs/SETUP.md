@@ -338,7 +338,9 @@ same icon closes the panel and brings the email back.
   meters under the title show your storage (used / limit) and today's uploads against
   your plan's daily limit.
 - **ImgLink:** images only (JPG, PNG, GIF, WebP, SVG, BMP, ICO, TIFF, AVIF), up to
-  25 MB anonymously or 50 MB with an API key. Every upload is sent as private, so it is never in ImgLink's public
+  25 MB anonymously or 50 MB with an API key. Without a key ImgLink allows 10 uploads
+  per 10 minutes (per internet connection, a rolling window); with a key, 100 an hour.
+  If you hit the limit, the row says how many minutes to wait. Every upload is sent as private, so it is never in ImgLink's public
   gallery or search. Uploads are anonymous unless you add an API key (imglink.cc →
   Dashboard → API Keys) in **Settings → Uploads → ImgLink API key**. Files uploaded
   with the key can be deleted from the list (trash icon); anonymous uploads can't be.
