@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unread Mail &amp; File Hosting</title>
+<meta name="description" content="A personal Chrome extension: unread mail from Gmail, Outlook, iCloud, Yahoo, AOL and Proton in one tab, plus file hosting on Catbox, x02 and ImgLink.">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #fff; --border: #e3e6ea; --text: #1b1f24; --text-2: #5b636d; --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111418; --surface: #181c21; --border: #2b3139; --text: #e7eaee; --text-2: #a8b0ba; --accent: #7aa2ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 28px; line-height: 1.25; margin: 0 0 8px; }
+  h1 span { color: var(--text-2); font-weight: 500; }
+  .lead { color: var(--text-2); margin: 0 0 32px; font-size: 17px; }
+  section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2); }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); }
+  footer { margin-top: 32px; font-size: 14px; color: var(--text-2); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Unread Mail <span>&amp; File Hosting</span></h1>
+  <p class="lead">A personal Chrome extension that shows unread mail from several accounts in one tab, and uploads files to file hosts for quick share links.</p>
+
+  <section>
+    <h2>Mail</h2>
+    <ul>
+      <li>Gmail, Outlook.com / Hotmail, iCloud, Yahoo, AOL and Proton accounts side by side, newest first.</li>
+      <li>Read, reply, forward, write, mark read or unread, delete, and see Recently read, Sent, Drafts and Spam.</li>
+      <li>Attachments (PDF, Word, Excel, images, video, audio, text) open inside the app.</li>
+      <li>An offline cache on your computer, so listed emails open instantly.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>File hosting</h2>
+    <ul>
+      <li>Drop, choose or paste files to upload them to Catbox, x02 or ImgLink.</li>
+      <li>Each file gets a link that is copied to the clipboard; recent uploads stay listed with previews.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <p>The extension runs entirely in your browser. It has no server of its own: your mail, sign-ins and settings stay on your computer and only go to the services you connect. Read the <a href="privacy.html">privacy policy</a>.</p>
+  </section>
+
+  <footer>
+    Source code and setup guide: <a href="https://github.com/rycpot/Unread-Mail_File-Hosting">github.com/rycpot/Unread-Mail_File-Hosting</a>
+  </footer>
+</main>
+</body>
+</html>

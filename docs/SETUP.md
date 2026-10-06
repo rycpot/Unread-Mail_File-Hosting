@@ -42,13 +42,10 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
 5. **Audience → Test users → Add users**: add each Gmail address you will connect.
    Leave the publishing status on **Testing**.
 
-   *Why not "In production"?* Because Gmail scopes are restricted, the console only
-   allows **Publish app** once Branding also has a home page, a privacy policy link
-   and an authorized domain that you own. Testing mode needs none of these. Its one
-   downside is that Google may expire the grant after 7 days, in which case the
-   account shows **Signed out** and one click on **Sign in** fixes it. If that
-   becomes annoying, fill in those Branding fields and publish. Do not submit for
-   verification either way.
+   *Testing vs. In production:* in **Testing**, Google cancels the Gmail permission
+   after 7 days, so every Gmail account shows **Signed out** weekly until you click
+   **Sign in**. To stop that, publish the app once ("In production", below). Do not
+   submit it for verification either way.
 6. **Clients → Create client**:
    - Application type: **Web application**
    - Authorized redirect URIs: `https://gnkolniepchhhfhnopbhgbnedkplhjjj.chromiumapp.org/`
@@ -60,6 +57,33 @@ When you add each Gmail account you will see **"Google hasn't verified this app"
 Click **Advanced → Go to Unread Mail (unsafe)**, then tick the Gmail permission box.
 This is expected for a personal, unverified app: the app is yours. (In Testing mode
 only addresses listed as test users can sign in; others get "Access blocked".)
+
+### Publishing (stops the weekly Gmail sign-in)
+
+Google only lets an app with Gmail access leave Testing when Branding has a home
+page, a privacy policy and an authorized domain. This repository includes both pages
+(`docs/index.html` and `docs/privacy.html`), served free by GitHub Pages:
+
+1. On GitHub: **Settings → Pages → Build and deployment**: Source **Deploy from a
+   branch**, branch `claude/blissful-faraday-8ykg9h`, folder **/docs**, Save. After a
+   minute the pages are at `https://rycpot.github.io/Unread-Mail_File-Hosting/` and
+   `…/privacy.html`.
+2. Google Cloud → **Google Auth Platform → Branding**:
+   - Application home page: `https://rycpot.github.io/Unread-Mail_File-Hosting/`
+   - Application privacy policy link: `https://rycpot.github.io/Unread-Mail_File-Hosting/privacy.html`
+   - Authorized domains: `rycpot.github.io`
+   - Save. If the console asks you to verify ownership of the domain, use
+     [Google Search Console](https://search.google.com/search-console) with a
+     **URL prefix** property for the home page address above and the **HTML file**
+     method: add the file it gives you to `docs/` (or ask for it to be added), then
+     click **Verify**.
+3. **Audience → Publish app → Confirm.** Ignore any offer to submit for verification.
+4. In the extension, click **Sign in** on each Gmail account once. From then on the
+   permission no longer expires after 7 days (only if you revoke it, change your
+   Google password, or don't use it for six months).
+
+You will still see "Google hasn't verified this app" when signing in; that is
+expected for a personal app and harmless.
 
 ## 2. Microsoft (Hotmail / Outlook.com)
 
