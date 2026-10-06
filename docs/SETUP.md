@@ -35,7 +35,9 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
 1. Go to <https://console.cloud.google.com/> and create a project, e.g. `unread-mail`.
 2. **APIs & Services → Library**: search **Gmail API** and click **Enable**.
 3. **Google Auth Platform → Branding** (older consoles: *OAuth consent screen*):
-   - App name: anything, e.g. `Unread Mail`; support email: your address.
+   - App name: e.g. `Unread Mail & File Hosting` (no emoji, and not "Gmail" or
+     "Google"); support email: your address. **Leave App logo empty**: uploading a
+     logo makes Google require verification.
    - **Audience**: user type **External**.
 4. **Data Access → Add or remove scopes**: add
    `https://www.googleapis.com/auth/gmail.modify`, save.
@@ -54,30 +56,39 @@ Microsoft app registration; they serve all of your Gmail and Hotmail accounts.
    used.
 
 When you add each Gmail account you will see **"Google hasn't verified this app"**.
-Click **Advanced → Go to Unread Mail (unsafe)**, then tick the Gmail permission box.
+Click **Advanced → Go to <your app name> (unsafe)**, then tick the Gmail permission box.
 This is expected for a personal, unverified app: the app is yours. (In Testing mode
 only addresses listed as test users can sign in; others get "Access blocked".)
 
 ### Publishing (stops the weekly Gmail sign-in)
 
+**No verification needed.** Publishing ("In production") and *verification* are
+different things. Publish, but never submit the app for verification: that is
+Google's review for public apps (for Gmail access it includes a paid security
+assessment). Unverified, your app works for up to 100 Google accounts, with the
+"hasn't verified this app" screen at sign-in. Afterwards the console shows a
+banner saying the app "requires verification"; ignore it.
+
 Google only lets an app with Gmail access leave Testing when Branding has a home
 page, a privacy policy and an authorized domain. This repository includes both pages
-(`docs/index.html` and `docs/privacy.html`), served free by GitHub Pages:
+(`docs/index.html` and `docs/privacy.html`); GitHub Pages serves them for free.
+Use your own copy of the repository (a fork, or the one you install from) so the
+pages are at your own address, below `https://<your-username>.github.io/<repo>/`:
 
-1. On GitHub: **Settings → Pages → Build and deployment**: Source **Deploy from a
-   branch**, branch `claude/blissful-faraday-8ykg9h`, folder **/docs**, Save. After a
-   minute the pages are at `https://rycpot.github.io/Unread-Mail_File-Hosting/` and
-   `…/privacy.html`.
+1. On GitHub, in your repository: **Settings → Pages → Build and deployment**:
+   Source **Deploy from a branch**, the branch you install from, folder **/docs**,
+   Save. After a minute the pages are at `https://<your-username>.github.io/<repo>/`
+   and `…/privacy.html`.
 2. Google Cloud → **Google Auth Platform → Branding**:
-   - Application home page: `https://rycpot.github.io/Unread-Mail_File-Hosting/`
-   - Application privacy policy link: `https://rycpot.github.io/Unread-Mail_File-Hosting/privacy.html`
-   - Authorized domains: `rycpot.github.io`
-   - Save. If the console asks you to verify ownership of the domain, use
-     [Google Search Console](https://search.google.com/search-console) with a
-     **URL prefix** property for the home page address above and the **HTML file**
-     method: add the file it gives you to `docs/` (or ask for it to be added), then
-     click **Verify**.
-3. **Audience → Publish app → Confirm.** Ignore any offer to submit for verification.
+   - Application home page: `https://<your-username>.github.io/<repo>/`
+   - Application privacy policy link: `https://<your-username>.github.io/<repo>/privacy.html`
+   - Authorized domains: `<your-username>.github.io` (keep `chromiumapp.org` too)
+   - App logo: empty. Save.
+   - Only if the console insists on proof that you own the domain (this is not app
+     verification): in [Google Search Console](https://search.google.com/search-console)
+     add a **URL prefix** property for the home page address, choose the **HTML
+     file** method, put the file it gives you in `docs/`, then click **Verify**.
+3. **Audience → Publish app → Confirm.** Do not submit for verification.
 4. In the extension, click **Sign in** on each Gmail account once. From then on the
    permission no longer expires after 7 days (only if you revoke it, change your
    Google password, or don't use it for six months).
