@@ -1,7 +1,7 @@
-![Image](https://imglink.cc/cdn/f33p9JThQu.png)
-![Image](https://files.catbox.moe/e76gaz.png)
-![Image](https://files.catbox.moe/99ibyp.png)
-![Image](https://files.catbox.moe/3p0wm8.png)
+![Image](https://imglink.cc/cdn/5-6n1Q90cc.png)
+![Image](https://imglink.cc/cdn/Z8SIJ9JAUM.png)
+![Image](https://imglink.cc/cdn/8GSR4FSoks.png)
+![Image](https://imglink.cc/cdn/9pFDCw7vvr.png)
 # Unread Mail & File Hosting
 
 A Chrome extension (Manifest V3) that shows unread mail from several accounts in one
