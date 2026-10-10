@@ -234,15 +234,31 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   injectIntoOpenProtonTabs();
   checkUpdateQuietly();
   // Installed from the app's update banner: reopen the app, which says so.
-  const { updating } = await chrome.storage.local.get('updating');
+  const { updating, appTab } = await chrome.storage.local.get(['updating', 'appTab']);
   if (reason === 'update' && updating) {
     await chrome.storage.local.remove('updating');
     await chrome.storage.local.set({ justUpdated: chrome.runtime.getManifest().version });
     openApp();
+  } else if (reason === 'update' && appTab) {
+    // Reloaded (e.g. "Update" in chrome://extensions reloads every unpacked
+    // extension), which closed the app tab: bring it back as it was.
+    openApp();
   }
 });
 
+// The app tab closed by you is forgotten, so a later reload doesn't reopen it. On
+// a reload the worker is stopped first, so this doesn't run and the tab comes back.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { appTab } = await chrome.storage.local.get('appTab');
+  if (appTab?.id === tabId) await chrome.storage.local.remove('appTab');
+});
+
 chrome.runtime.onStartup.addListener(() => {
+  // Tab ids don't survive a Chrome restart: note the app tab if Chrome restored it.
+  chrome.runtime.getContexts({ contextTypes: ['TAB'] }).then((tabs) => {
+    const t = tabs.find((x) => x.documentUrl?.startsWith(APP_URL));
+    return t ? chrome.storage.local.set({ appTab: { id: t.tabId } }) : chrome.storage.local.remove('appTab');
+  }).catch(() => {});
   schedule();
   refreshAll();
   injectIntoOpenProtonTabs();

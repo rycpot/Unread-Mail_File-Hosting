@@ -1830,6 +1830,9 @@ renderUpdateBar();
 {
   const me = await chrome.tabs.getCurrent().catch(() => null);
   if (me) {
+    // Lets the background reopen this tab after the extension is reloaded (it
+    // forgets the tab when you close it yourself).
+    chrome.storage.local.set({ appTab: { id: me.id } });
     const { appTabPinned } = await chrome.storage.local.get('appTabPinned');
     if (appTabPinned && !me.pinned) await chrome.tabs.update(me.id, { pinned: true }).catch(() => {});
     else if (appTabPinned === undefined && me.pinned) chrome.storage.local.set({ appTabPinned: true });

@@ -1,4 +1,5 @@
 {
+  "0.15.5": "After Update in chrome://extensions (which reloads the extension and closes its tab), the app tab now reopens by itself, pinned if it was. A tab you closed yourself stays closed.",
   "0.15.4": "If you pin the app tab, it stays pinned: when Chrome reopens it (for example after Update in chrome://extensions), it pins itself again.",
   "0.15.3": "Uploads: no more lost entries when uploads finish together, deleting works for files already removed on x02 or Catbox, no duplicate uploads after an unclear reply, and links are copied even when you're in another tab.",
   "0.15.2": "ImgLink: the anonymous limit is described as approximate (\"may limit … about 10 per 10 minutes\").",
