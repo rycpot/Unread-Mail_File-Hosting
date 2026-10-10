@@ -50,7 +50,7 @@ export const UPLOADERS = {
     },
     // ImgLink can't fetch a link; this hands over to downloading it here.
     async fromUrl() {
-      throw new Error("ImgLink can't fetch links itself.");
+      throw Object.assign(new Error("ImgLink can't fetch links itself."), { clearFailure: true });
     },
     // Asks to change an image that doesn't exist: a good key gets "not found",
     // a bad one 401. Nothing is uploaded or changed.
@@ -135,15 +135,31 @@ export const UPLOADERS = {
     },
     // The service downloads the file itself (images only, per x02's docs).
     async fromUrl(url, s, { expiry }) {
-      const res = await fetch('https://up.x02.me/api/upload/url', {
-        method: 'POST',
-        headers: { 'x-api-key': s.x02ApiKey.trim(), 'content-type': 'application/json' },
-        body: JSON.stringify({ imageUrl: url, ...(expiry ? { expiry } : {}) }),
-      });
+      let res;
+      try {
+        res = await fetch('https://up.x02.me/api/upload/url', {
+          method: 'POST',
+          headers: { 'x-api-key': s.x02ApiKey.trim(), 'content-type': 'application/json' },
+          body: JSON.stringify({ imageUrl: url, ...(expiry ? { expiry } : {}) }),
+        });
+      } catch {
+        throw new Error("Couldn't reach x02. Check the connection."); // not stored: nothing to fall back on
+      }
       const text = await res.text();
-      const link = this.parse(res.status, text);
-      const data = JSON.parse(text).data ?? {};
-      return { url: link, size: data.sizeBytes ?? 0, name: data.originalFilename };
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      try {
+        const link = this.parse(res.status, text);
+        const data = body?.data ?? {};
+        return { url: link, size: data.sizeBytes ?? 0, name: data.originalFilename };
+      } catch (e) {
+        // Only a plain failure (e.g. it couldn't fetch the link) may be retried as a
+        // file; any other reply could mean it was stored after all (a duplicate).
+        e.clearFailure = body?.success === false || (res.status >= 400 && res.status < 500);
+        throw e;
+      }
     },
     // The account's latest uploads, including ones made on the x02 website.
     async list(s) {
@@ -223,8 +239,21 @@ export const UPLOADERS = {
       form.append('reqtype', 'urlupload');
       if (s.catboxUserhash?.trim()) form.append('userhash', s.catboxUserhash.trim());
       form.append('url', url);
-      const res = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: form });
-      return { url: this.parse(res.status, await res.text()), size: 0 };
+      let res;
+      try {
+        res = await fetch('https://catbox.moe/user/api.php', { method: 'POST', body: form });
+      } catch {
+        throw new Error("Couldn't reach Catbox. Check the connection.");
+      }
+      const text = await res.text();
+      try {
+        return { url: this.parse(res.status, text), size: 0 };
+      } catch (e) {
+        // Catbox answers a refusal with its reason as text; a server error or an
+        // empty reply leaves it unclear whether the file was stored.
+        e.clearFailure = (res.status >= 400 && res.status < 500) || (res.ok && text.trim() !== '');
+        throw e;
+      }
     },
     // Catbox can only delete files uploaded with the userhash.
     canDelete: (s, entry) => Boolean(s.catboxUserhash?.trim() && entry.account),
@@ -321,10 +350,27 @@ async function readHistory() {
   }
 }
 
-async function addToHistory(service, entries) {
-  const all = await readHistory();
-  all[service] = [...entries, ...(all[service] ?? [])].slice(0, HISTORY_MAX);
-  await chrome.storage.local.set({ [HISTORY_KEY]: all });
+// Every change to the saved list goes through one lock, shared by all app tabs:
+// two uploads finishing together, or one finishing during a delete, would
+// otherwise each write back their own copy and drop the other's change.
+function changeHistory(service, change) {
+  return navigator.locks.request('unread-mail-upload-history', async () => {
+    const all = await readHistory();
+    all[service] = change(all[service] ?? []).slice(0, HISTORY_MAX);
+    await chrome.storage.local.set({ [HISTORY_KEY]: all });
+  });
+}
+const addToHistory = (service, entries) => changeHistory(service, (list) => [...entries, ...list]);
+const removeFromHistory = (service, url) => changeHistory(service, (list) => list.filter((h) => h.url !== url));
+
+// Whether an uploaded file's link is gone (deleted on the service's website).
+async function linkGone(url) {
+  try {
+    const res = await fetch(url, { method: 'HEAD', credentials: 'omit', cache: 'no-store' });
+    return res.status === 404 || res.status === 410;
+  } catch {
+    return false; // can't tell: keep the row
+  }
 }
 
 
@@ -594,14 +640,56 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
   }
 
   async function copy(text, what) {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await writeClipboard(text)) {
       toast(`${what} copied`);
       return true;
-    } catch {
-      toast("Couldn't copy automatically. Click the link to copy it.", { error: true });
-      return false;
     }
+    toast("Couldn't copy automatically. Click the link to copy it.", { error: true });
+    return false;
+  }
+
+  // Chrome refuses navigator.clipboard while another tab is in front ("Document is
+  // not focused"), e.g. when an upload finishes after switching tabs; the older
+  // copy command still works there (the extension has the clipboardWrite permission).
+  async function writeClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const area = Object.assign(document.createElement('textarea'), { value: text });
+      area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+      const focused = document.activeElement;
+      document.body.append(area);
+      area.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch {}
+      area.remove();
+      focused?.focus?.({ preventScroll: true });
+      return ok;
+    }
+  }
+
+  // Links of batches finishing together are copied as one, so the second batch
+  // doesn't replace the first on the clipboard.
+  let pendingLinks = [];
+  let pendingWaiters = [];
+  let pendingTimer;
+  function copyLinks(urls) {
+    pendingLinks.push(...urls);
+    clearTimeout(pendingTimer);
+    return new Promise((resolve) => {
+      pendingWaiters.push(resolve);
+      pendingTimer = setTimeout(async () => {
+        const links = pendingLinks;
+        const waiters = pendingWaiters;
+        pendingLinks = [];
+        pendingWaiters = [];
+        await copy(links.join('\n'), links.length > 1 ? `${links.length} links` : 'Link');
+        waiters.forEach((w) => w());
+      }, 300);
+    });
   }
 
   // One upload each: a file, or a web address the service fetches itself
@@ -627,6 +715,12 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
           const got = await UPLOADERS[svc].fromUrl(address, s, options);
           return { url: got.url, size: got.size, name: got.name || name };
         } catch (e) {
+          // An unclear reply may mean the file was stored anyway: don't upload it
+          // a second time; the refreshed list shows whether it arrived.
+          if (!e.clearFailure) {
+            e.message = `${e.message} It may have been uploaded anyway: check Recent uploads before trying again.`;
+            throw e;
+          }
           // The service couldn't fetch it: download it here, if allowed.
           if (await canDownloadHere()) {
             try {
@@ -714,11 +808,14 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
         renderRow(svc, r);
       }
     }));
-    if (!done.length) return;
+    if (!done.length) {
+      await fetchRemote(svc); // shows a file stored despite an unclear reply
+      return;
+    }
     // Drop order, in the list and the clipboard (two upload at a time).
     done.sort((a, b) => a.order - b.order);
     await addToHistory(svc, done.map(({ order, ...d }) => d));
-    await copy(done.map((d) => d.url).join('\n'), done.length > 1 ? `${done.length} links` : 'Link');
+    await copyLinks(done.map((d) => d.url));
     await fetchRemote(svc);
     await render();
   }
@@ -761,12 +858,13 @@ export function createUploadPanel({ panel, reader, getSettings, openSettings, to
     try {
       await UPLOADERS[svc].remove(entry, getSettings());
     } catch (e) {
-      toast(`Couldn't delete: ${e.message}`, { error: true });
-      return;
+      // Already deleted on the website? Then it only has to leave the list.
+      if (!(await linkGone(url))) {
+        toast(`Couldn't delete: ${e.message}`, { error: true });
+        return;
+      }
     }
-    const all = await readHistory();
-    all[svc] = (all[svc] ?? []).filter((h) => h.url !== url);
-    await chrome.storage.local.set({ [HISTORY_KEY]: all });
+    await removeFromHistory(svc, url);
     if (remote[svc]?.entries) remote[svc].entries = remote[svc].entries.filter((e) => e.url !== url);
     if (thumbs?.[url]) {
       delete thumbs[url];

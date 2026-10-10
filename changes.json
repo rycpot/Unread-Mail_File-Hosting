@@ -1,4 +1,5 @@
 {
+  "0.15.3": "Uploads: no more lost entries when uploads finish together, deleting works for files already removed on x02 or Catbox, no duplicate uploads after an unclear reply, and links are copied even when you're in another tab.",
   "0.15.2": "ImgLink: the anonymous limit is described as approximate (\"may limit … about 10 per 10 minutes\").",
   "0.15.1": "ImgLink without an API key: the panel states its real limit (10 uploads per 10 minutes), and hitting a limit says how many minutes to wait.",
   "0.15.0": "Upload panels show storage and upload limits as two small meters under the title, in each service's colour: x02 (storage, today's uploads) and ImgLink with your API key (storage, uploads this hour).",
