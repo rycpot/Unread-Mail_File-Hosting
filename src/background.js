@@ -273,7 +273,8 @@ async function openApp(open) {
     await chrome.windows.update(appTab.windowId, { focused: true });
   } else {
     const win = await chrome.windows.getLastFocused().catch(() => null);
-    await chrome.tabs.create({ url: APP_URL + hash, ...(win && { windowId: win.id }) });
+    const { appTabPinned } = await chrome.storage.local.get('appTabPinned');
+    await chrome.tabs.create({ url: APP_URL + hash, pinned: Boolean(appTabPinned), ...(win && { windowId: win.id }) });
     if (win) await chrome.windows.update(win.id, { focused: true });
   }
 }

@@ -1823,6 +1823,23 @@ renderUpdateBar();
   }
 }
 
+// Keeps the app tab pinned if you pinned it. Chrome closes an extension's tabs
+// when it is reloaded (e.g. "Update" in chrome://extensions reloads every
+// unpacked extension), and the tab that comes back is not pinned: the tab
+// remembers its pin and restores it whenever it opens.
+{
+  const me = await chrome.tabs.getCurrent().catch(() => null);
+  if (me) {
+    const { appTabPinned } = await chrome.storage.local.get('appTabPinned');
+    if (appTabPinned && !me.pinned) await chrome.tabs.update(me.id, { pinned: true }).catch(() => {});
+    else if (appTabPinned === undefined && me.pinned) chrome.storage.local.set({ appTabPinned: true });
+    // Pinning or unpinning the tab yourself changes what is remembered.
+    chrome.tabs.onUpdated.addListener((tabId, change) => {
+      if (tabId === me.id && 'pinned' in change) chrome.storage.local.set({ appTabPinned: change.pinned });
+    });
+  }
+}
+
 // "#open=<accountId>::<messageId>" (from a notification click) opens that email.
 function openFromHash() {
   const m = location.hash.match(/^#open=(.+)$/);
