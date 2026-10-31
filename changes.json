@@ -1,4 +1,5 @@
 {
+  "0.15.9": "The app tab's icon shows the red dot again when there is unread mail, and ticked emails are no longer unticked whenever the list updates (both broken in 0.15.7).",
   "0.15.8": "No more red-dot flash on the app tab or toolbar icon while the extension loads or Chrome starts: the extension's own icon (which Chrome shows until the app has loaded) is now the one without the dot.",
   "0.15.7": "The red dot no longer flashes on the icon and tab when Chrome starts: it waits for the first check, so it only shows for mail that is really unread. Outlook and Hotmail no longer show \"Sign in\" at random when the app and the background renew their sign-in at the same moment.",
   "0.15.6": "Outlook and Hotmail: saving drafts and sending work again (both failed with \"Could not find a property named 'contentId'\").",

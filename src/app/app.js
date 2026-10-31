@@ -57,6 +57,7 @@ const state = {
   view: null, // { provider, account } filter for the list, set below
   visibleList: [], // messages currently listed, in order
   checked: new Set(), // "<accountId>::<messageId>" keys of ticked emails
+  syncedAccounts: new Set(), // accounts checked since Chrome started (see checkedThisSession)
   lastPicked: null, // key of the last ticked email, anchor for shift-click ranges
   allUnread: false, // "select all N unread" beyond the listed emails
   progress: null, // "Marking 120 of 812…" while a bulk action runs
@@ -117,7 +118,7 @@ async function load() {
   state.mail = await getAllMail(Object.keys(state.accounts));
   state.settings = await getSettings();
   state.accountOrder = (await chrome.storage.local.get('accountOrder')).accountOrder ?? [];
-  state.checked = await checkedThisSession();
+  state.syncedAccounts = await checkedThisSession();
 }
 
 // Accounts in the user's order (drag the chips, or "Make default"); the first
@@ -209,7 +210,7 @@ function renderTopbar() {
   for (const a of Object.values(state.accounts)) {
     const m = state.mail[a.id];
     // Only accounts checked since Chrome started count (see checkedThisSession).
-    if (!a.hidden && state.checked?.has(a.id)) total += m?.unreadCount ?? 0;
+    if (!a.hidden && state.syncedAccounts?.has(a.id)) total += m?.unreadCount ?? 0;
     lastChecked = Math.max(lastChecked, m?.lastCheckedAt ?? 0);
   }
   $('total').hidden = total === 0;
