@@ -180,31 +180,42 @@ export async function saveToken(id, token) {
   await setAuth(id, { ...token, refreshToken: token.refreshToken ?? prev?.refreshToken, scope: token.scope || prev?.scope });
 }
 
-// Coalesce concurrent renewals for the same account within one context.
-const inflight = new Map();
-
-export function getAccessToken(account, { forceRenew = false } = {}) {
-  const key = `${account.id}:${forceRenew}`;
-  if (!inflight.has(key)) {
-    inflight.set(key, renew(account, forceRenew).finally(() => inflight.delete(key)));
-  }
-  return inflight.get(key);
+// Renewals are serialised per account across every context of the extension
+// (the background worker and the app tab both refresh, often at the same
+// moment, e.g. right after Chrome starts). Microsoft rotates refresh tokens,
+// so two contexts redeeming the same one at once could make one of them fail
+// and wrongly mark the account as needing sign-in. Inside the lock the stored
+// token is read again, so whoever waited picks up the token just renewed.
+// stale: the access token that just got a 401; a different, still valid
+// token in storage means another context already renewed it.
+export function getAccessToken(account, { forceRenew = false, stale = null } = {}) {
+  return navigator.locks.request(`auth:${account.id}`, () => renew(account, forceRenew, stale));
 }
 
-async function renew(account, forceRenew) {
-  const cached = await getAuth(account.id);
-  if (!forceRenew && cached?.accessToken && cached.expiresAt - Date.now() > EXPIRY_MARGIN_MS) {
+const usable = (t) => t?.accessToken && t.expiresAt - Date.now() > EXPIRY_MARGIN_MS;
+
+async function renew(account, forceRenew, stale) {
+  let cached = await getAuth(account.id);
+  if (usable(cached) && (!forceRenew || (stale && cached.accessToken !== stale))) {
     return cached.accessToken;
   }
   if (account.provider === 'outlook' && cached?.refreshToken) {
-    try {
-      const scopes = canSend(cached) ? [...MS_SCOPES, MS_SEND_SCOPE] : MS_SCOPES;
-      const token = await msToken({ grant_type: 'refresh_token', refresh_token: cached.refreshToken }, scopes);
-      await saveToken(account.id, token);
-      return token.accessToken;
-    } catch (e) {
-      // invalid_grant = refresh token expired/revoked; fall through to silent re-auth.
-      if (e.code !== 'invalid_grant' && e.code !== 'interaction_required') throw e;
+    // A second try covers a refresh token rotated by an older version of the
+    // extension (or another browser profile window) between our read and use.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const scopes = canSend(cached) ? [...MS_SCOPES, MS_SEND_SCOPE] : MS_SCOPES;
+        const token = await msToken({ grant_type: 'refresh_token', refresh_token: cached.refreshToken }, scopes);
+        await saveToken(account.id, token);
+        return token.accessToken;
+      } catch (e) {
+        // invalid_grant = refresh token expired/revoked; fall through to silent re-auth.
+        if (e.code !== 'invalid_grant' && e.code !== 'interaction_required') throw e;
+        const latest = await getAuth(account.id);
+        if (usable(latest) && latest.accessToken !== cached.accessToken) return latest.accessToken;
+        if (attempt || !latest?.refreshToken || latest.refreshToken === cached.refreshToken) break;
+        cached = latest;
+      }
     }
   }
   const token = await authorize[account.provider]({ loginHint: account.email, interactive: false, send: canSend(cached) });

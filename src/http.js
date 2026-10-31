@@ -12,8 +12,9 @@ export class ApiError extends Error {
 // a second 401 means the account needs an interactive sign-in.
 // rawBody (string/Blob) is sent as is, with its Content-Type in headers.
 export async function apiFetch(account, url, { method = 'GET', body, rawBody, headers = {}, raw = false } = {}) {
+  let token = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await getAccessToken(account, { forceRenew: attempt > 0 });
+    token = await getAccessToken(account, { forceRenew: attempt > 0, stale: token });
     const res = await fetch(url, {
       method,
       headers: {

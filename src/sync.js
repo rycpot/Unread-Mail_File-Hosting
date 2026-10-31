@@ -16,6 +16,18 @@ export function refreshAccount(account) {
   return inflight.get(account.id);
 }
 
+// Accounts checked since Chrome started (chrome.storage.session is emptied on
+// every restart). Until an account has been checked, its stored unread count
+// is from the last session and may be out of date (mail read on another
+// device meanwhile), so the red dot and counts leave it out: otherwise the
+// icon would flash a red dot at every Chrome start until the first check.
+const CHECKED = 'checked/';
+export async function checkedThisSession() {
+  const all = await chrome.storage.session.get(null);
+  return new Set(Object.keys(all).filter((k) => k.startsWith(CHECKED)).map((k) => k.slice(CHECKED.length)));
+}
+const markChecked = (id) => chrome.storage.session.set({ [CHECKED + id]: true }).catch(() => {});
+
 async function doRefresh(account) {
   const now = Date.now();
   try {
@@ -23,6 +35,8 @@ async function doRefresh(account) {
     const prev = await getMail(account.id);
     const { unreadCount, messages, spamUnread = null } = await providers[account.provider].fetchSummary(account, prev);
     const { fresh, mark } = newArrivals(account, prev, messages);
+    // Marked just before the new count is stored, so that change counts it.
+    await markChecked(account.id);
     await patchMail(account.id, {
       status: 'ok', error: null, unreadCount, messages, spamUnread, mark, lastCheckedAt: now, lastSuccessAt: now,
     });
@@ -32,6 +46,7 @@ async function doRefresh(account) {
   } catch (e) {
     const status = e instanceof AuthRequiredError ? 'auth' : 'error';
     console.warn(`[sync] ${account.id} failed:`, e);
+    await markChecked(account.id); // nothing newer to go on: the stored count stands
     await patchMail(account.id, { status, error: e.message, lastCheckedAt: now });
   }
 }
@@ -110,12 +125,13 @@ export async function refreshDue(pollMinutes, hasPush) {
 export async function updateBadge() {
   const accounts = Object.values(await getAccounts()).filter((a) => !a.hidden);
   const mail = await getAllMail(accounts.map((a) => a.id));
+  const checked = await checkedThisSession();
   let total = 0;
   const lines = ['Unread Mail'];
   let needsAttention = false;
   for (const a of accounts) {
     const m = mail[a.id];
-    total += m?.unreadCount ?? 0;
+    if (checked.has(a.id)) total += m?.unreadCount ?? 0;
     if (m?.status === 'auth') needsAttention = true;
     const suffix = m?.status === 'auth' ? ' (sign-in needed)' : m?.status === 'error' ? ' (error)' : '';
     lines.push(`${a.email}: ${m?.unreadCount ?? 0}${suffix}`);
