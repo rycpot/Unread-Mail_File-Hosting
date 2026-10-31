@@ -1,4 +1,5 @@
 {
+  "0.15.7": "The red dot no longer flashes on the icon and tab when Chrome starts: it waits for the first check, so it only shows for mail that is really unread. Outlook and Hotmail no longer show \"Sign in\" at random when the app and the background renew their sign-in at the same moment.",
   "0.15.6": "Outlook and Hotmail: saving drafts and sending work again (both failed with \"Could not find a property named 'contentId'\").",
   "0.15.5": "After Update in chrome://extensions (which reloads the extension and closes its tab), the app tab now reopens by itself, pinned if it was. A tab you closed yourself stays closed.",
   "0.15.4": "If you pin the app tab, it stays pinned: when Chrome reopens it (for example after Update in chrome://extensions), it pins itself again.",

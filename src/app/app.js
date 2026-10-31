@@ -4,7 +4,7 @@ import {
   accountId, getAccounts, getAllMail, getMail, getSettings, patchMail, removeAccount,
   getClientIds, saveClientIds, saveSettings, setAccountHidden, upsertAccount,
 } from '../storage.js';
-import { refreshAccount } from '../sync.js';
+import { checkedThisSession, refreshAccount } from '../sync.js';
 import { buildEmailDocument } from './render-email.js';
 import { callHelper } from '../native.js';
 import { compareVersions, currentVersion } from '../update.js';
@@ -117,6 +117,7 @@ async function load() {
   state.mail = await getAllMail(Object.keys(state.accounts));
   state.settings = await getSettings();
   state.accountOrder = (await chrome.storage.local.get('accountOrder')).accountOrder ?? [];
+  state.checked = await checkedThisSession();
 }
 
 // Accounts in the user's order (drag the chips, or "Make default"); the first
@@ -207,7 +208,8 @@ function renderTopbar() {
   let lastChecked = 0;
   for (const a of Object.values(state.accounts)) {
     const m = state.mail[a.id];
-    if (!a.hidden) total += m?.unreadCount ?? 0;
+    // Only accounts checked since Chrome started count (see checkedThisSession).
+    if (!a.hidden && state.checked?.has(a.id)) total += m?.unreadCount ?? 0;
     lastChecked = Math.max(lastChecked, m?.lastCheckedAt ?? 0);
   }
   $('total').hidden = total === 0;
