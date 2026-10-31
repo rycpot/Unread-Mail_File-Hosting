@@ -204,7 +204,7 @@ export const outlook = {
 
     // Attachments: claim server copies (e.g. a forward's originals) by name
     // and size, upload the rest, remove leftovers.
-    const server = ((await apiFetch(account, `${API}/messages/${enc(ref)}/attachments?$select=id,name,size,isInline,contentId`)).value ?? []);
+    const server = ((await apiFetch(account, `${API}/messages/${enc(ref)}/attachments?$select=id,name,size,isInline`)).value ?? []);
     const wanted = [
       ...(draft.attachments ?? []).map((a) => ({ item: a, inline: false })),
       ...(draft.inline ?? []).map((a) => ({ item: a, inline: true })),
