@@ -16,7 +16,7 @@ import { inlineParts } from './inline-images.js';
 import { fmtDate, fmtDateTime, fmtTime } from './format.js';
 import * as cacheDb from '../cache-db.js';
 import { fetchAttachment, fetchFullMessage } from '../message-fetch.js';
-import { lastDownloadError } from '../download-log.js';
+import { lastDownloadError, lastRun } from '../download-log.js';
 import { dropFromSectionList, getSectionLists, isSectionListKey, putSectionList } from '../section-lists.js';
 import { UPLOADERS, createUploadPanel } from './uploads.js';
 
@@ -1184,7 +1184,7 @@ function fetchBody(id, messageId, folder, info = {}) {
 // How long each step of opening an email took, and whether it came from the
 // offline cache. Always written to the console; shown as a toast when the
 // setting is on. t: { click, listed, fetched, prepared, drawn } (performance.now()).
-async function reportOpenTiming(id, info, t) {
+async function reportOpenTiming(id, info, t, where, shown) {
   const ms = (a, b) => `${Math.round(b - a)} ms`;
   const from = {
     memory: 'already in memory' + (info.first?.source === 'server'
@@ -1198,9 +1198,16 @@ async function reportOpenTiming(id, info, t) {
     `list ${ms(t.click, t.listed)}`,
     from + (info.joined ? ' (started on hover)' : ''),
     `prepare ${ms(t.fetched, t.prepared)}`,
-    `draw ${ms(t.prepared, t.drawn)}`,
+    `draw ${ms(t.prepared, t.drawn)}` + (shown
+      ? ` (${Math.round(shown.size / 1024)} KB, ${shown.inline} inline images, ${shown.remoteImages} remote images ${shown.allowRemote ? 'loaded from the web' : 'blocked'})`
+      : ''),
+    where,
   ];
   if (info.source === 'server') {
+    const run = await lastRun(id).catch(() => null);
+    parts.push(run
+      ? `last background download for this account ${ago(run.at)}: ${run.listed} listed, ${run.missing} were missing, ${run.fetched} fetched`
+      : 'no background download recorded for this account');
     const err = await lastDownloadError(id).catch(() => null);
     parts.push(err
       ? `last background download error (${err.what}, ${ago(err.at)}${err.count > 1 ? `, ${err.count}×` : ''}): ${err.message}`
@@ -1255,11 +1262,12 @@ async function openMessage(id, messageId, { folder, list } = {}) {
     if (listed !== undefined) msg.isRead = listed;
     state.message = msg;
     rememberAddresses([msg.from, ...(msg.to ?? []), ...(msg.cc ?? [])], 1);
-    renderReader();
+    const shown = renderReader();
     t.prepared = performance.now();
+    const where = `${providers[state.accounts[id]?.provider]?.name ?? '?'}, ${folder ?? 'inbox'}`;
     const done = () => {
       t.drawn = performance.now();
-      if (seq === openSeq) reportOpenTiming(id, info, t);
+      if (seq === openSeq) reportOpenTiming(id, info, t, where, shown);
     };
     const frame = reader.querySelector('iframe');
     if (frame) frame.addEventListener('load', done, { once: true });
@@ -1313,6 +1321,8 @@ function renderReader() {
       : '<iframe class="body-frame" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Email body"></iframe>'}`;
   if (!msg.encrypted) reader.querySelector('iframe').srcdoc = srcdoc;
   renderReaderToolbar();
+  // For the open timing.
+  return { size: srcdoc.length, remoteImages, allowRemote, inline: msg.inlineImages?.size ?? 0 };
 }
 
 function renderReaderToolbar() {

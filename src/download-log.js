@@ -1,5 +1,5 @@
 // The last few failures of the background downloader (src/prefetch.js) and of
-// saving to the offline cache, kept so the app can say why an email was not
+// saving to the offline cache, and what its last run did per account, kept so the app can say why an email was not
 // cached when it was opened (Settings → Show timing when opening an email).
 
 const KEY = 'downloadErrors';
@@ -25,4 +25,14 @@ export function logDownloadError(accountId, what, error) {
 export async function lastDownloadError(accountId) {
   const list = (await chrome.storage.local.get(KEY))[KEY] ?? [];
   return list.find((e) => e.accountId === accountId) ?? null;
+}
+
+// What the last run did per account, for the app's open timing:
+// { at, listed, missing, fetched }, one key per account.
+const stateKey = (accountId) => `prefetchState/${accountId}`;
+export async function noteRun(accountId, entry) {
+  await chrome.storage.local.set({ [stateKey(accountId)]: { at: Date.now(), ...entry } }).catch(() => {});
+}
+export async function lastRun(accountId) {
+  return (await chrome.storage.local.get(stateKey(accountId)))[stateKey(accountId)] ?? null;
 }
