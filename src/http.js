@@ -37,6 +37,9 @@ export async function apiFetch(account, url, { method = 'GET', body, rawBody, he
       throw new ApiError(detail || `Request failed (${res.status})`, res.status);
     }
     if (raw) return res;
-    return res.status === 204 ? null : res.json();
+    // Some calls succeed with an empty body (204, or Graph's 202 for sendMail),
+    // so read the text first and only parse it when there is something to parse.
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
   }
 }
