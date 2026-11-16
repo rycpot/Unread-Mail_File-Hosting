@@ -8,7 +8,7 @@ import { notificationClosed, queueNewMail, testNotification } from './notify.js'
 import { onNewMail, refreshAccount, refreshAll, refreshDue, updateBadge } from './sync.js';
 import { checkForUpdate } from './update.js';
 import { schedulePrefetch, sectionsChanged } from './prefetch.js';
-import { forgetSectionLists } from './section-lists.js';
+import { forgetSectionLists, isSectionListKey } from './section-lists.js';
 import * as cache from './cache-db.js';
 
 onNewMail(queueNewMail);
@@ -321,6 +321,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.accounts || Object.keys(changes).some((k) => k.startsWith('mail/'))) {
     updateBadge();
     // New mail (or a new account): download what is not cached yet.
+    schedulePrefetch();
+  } else if (Object.keys(changes).some(isSectionListKey)) {
+    // Recently read / Spam / Sent / Drafts changed (the app refreshed them).
     schedulePrefetch();
   }
   if (changes.accounts) {

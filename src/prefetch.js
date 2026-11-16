@@ -3,16 +3,17 @@
 // images and attachments as soon as it appears, so it opens instantly
 // (videos over 50 MB wait until they are opened).
 // Fetching never marks anything read. Runs in the service worker after each
-// check; the section lists (Recently read, Sent, Drafts, Spam) are re-read at
-// most every 15 minutes per account.
+// check and whenever a list changes; the section lists (Recently read, Sent,
+// Drafts, Spam) are re-read at most every 15 minutes per account, and also by
+// the app when a section is opened.
 
 import { providers } from './providers/index.js';
 import { getAccounts, getMail, getSettings } from './storage.js';
 import * as cache from './cache-db.js';
 import { completeAndStore } from './message-fetch.js';
 import { mediaKind } from './media-types.js';
-import { putSectionList } from './section-lists.js';
-import { logDownloadError } from './download-log.js';
+import { getSectionLists, putSectionList } from './section-lists.js';
+import { logDownloadError, noteRun } from './download-log.js';
 
 const SECTIONS_EVERY = 15 * 60e3;
 // Videos larger than this download when opened (and are cached then).
@@ -23,7 +24,6 @@ const SECTION_FETCH = {
   sent: { folder: 'sent', fetch: (p, a) => p.fetchSent?.(a, 5) },
 };
 const sectionsFetchedAt = new Map(); // account id -> time
-const sectionRows = new Map(); // account id -> { recent, spam, sent, drafts }
 
 let timer = null;
 let running = false;
@@ -41,32 +41,63 @@ export function schedulePrefetch(delay = 3000) {
 
 export const cacheLimitBytes = (settings) => (Number(settings.cacheLimitMB) || 0) * 1024 * 1024;
 
+// A stalled request (the network changed, the computer slept) must not stop
+// the downloader for good: each account's step gives up after this long.
+const BODIES_TIMEOUT = 3 * 60e3;
+const FILES_TIMEOUT = 15 * 60e3;
+const RUN_TIMEOUT = 45 * 60e3;
+let runningSince = 0;
+
+function withTimeout(promise, ms, what) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${what} gave up after ${Math.round(ms / 60e3)} min without finishing`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 async function run() {
-  if (running) {
+  if (running && Date.now() - runningSince < RUN_TIMEOUT) {
     again = true;
     return;
   }
   running = true;
+  const started = (runningSince = Date.now());
   try {
     const accounts = Object.values(await getAccounts()).filter((a) => !a.hidden);
-    for (const account of accounts) {
+    // Bodies first, all accounts at once, so opening is instant as soon as
+    // possible; attachments (which can be large) come after, one account at a time.
+    const listed = new Map();
+    await Promise.all(accounts.map(async (account) => {
       try {
-        await prefetchAccount(account);
+        listed.set(account.id, await withTimeout(prefetchBodies(account), BODIES_TIMEOUT, 'Downloading emails'));
+      } catch (e) {
+        logDownloadError(account.id, 'account', e);
+      }
+    }));
+    for (const account of accounts) {
+      if (!listed.has(account.id)) continue;
+      try {
+        await withTimeout(prefetchFiles(account, listed.get(account.id)), FILES_TIMEOUT, 'Downloading attachments');
       } catch (e) {
         logDownloadError(account.id, 'account', e);
       }
     }
     await cache.trim(cacheLimitBytes(await getSettings()));
   } finally {
-    running = false;
-    if (again) {
-      again = false;
-      schedulePrefetch(1000);
+    if (runningSince === started) {
+      running = false;
+      if (again) {
+        again = false;
+        schedulePrefetch(1000);
+      }
     }
   }
 }
 
-async function prefetchAccount(account) {
+// Downloads the bodies (with inline images) of everything the app lists for
+// the account. Returns what is listed, for prefetchFiles.
+async function prefetchBodies(account) {
   const provider = providers[account.provider];
   // What the app lists for this account.
   const items = []; // { folder, id }
@@ -74,26 +105,20 @@ async function prefetchAccount(account) {
   for (const m of mail?.messages ?? []) items.push({ folder: undefined, id: m.id });
 
   if (!sectionsFetchedAt.has(account.id) || Date.now() - sectionsFetchedAt.get(account.id) > SECTIONS_EVERY) {
-    const rows = {};
     for (const [kind, s] of Object.entries(SECTION_FETCH)) {
       try {
-        rows[kind] = (await s.fetch(provider, account)) ?? [];
         // The app shows these lists at once from here.
-        await putSectionList(account.id, kind, rows[kind]);
-      } catch {
-        rows[kind] = sectionRows.get(account.id)?.[kind] ?? [];
-      }
+        await putSectionList(account.id, kind, (await s.fetch(provider, account)) ?? []);
+      } catch {}
     }
     try {
-      rows.drafts = (await provider.fetchDrafts?.(account, 3)) ?? [];
-      await putSectionList(account.id, 'drafts', rows.drafts);
-    } catch {
-      rows.drafts = sectionRows.get(account.id)?.drafts ?? [];
-    }
-    sectionRows.set(account.id, rows);
+      await putSectionList(account.id, 'drafts', (await provider.fetchDrafts?.(account, 3)) ?? []);
+    } catch {}
     sectionsFetchedAt.set(account.id, Date.now());
   }
-  const rows = sectionRows.get(account.id) ?? {};
+  // The stored lists, not just what was fetched above: the app refreshes them
+  // too whenever a section is opened, and those emails are downloaded as well.
+  const rows = (await getSectionLists([account.id]))[account.id] ?? {};
   for (const [kind, s] of Object.entries(SECTION_FETCH)) {
     for (const m of rows[kind] ?? []) items.push({ folder: s.folder, id: m.id });
   }
@@ -111,7 +136,6 @@ async function prefetchAccount(account) {
   }
   const messages = [];
   for (const [folder, ids] of byFolder) {
-    let rest = ids;
     if (provider.getMessages) {
       // iCloud / Yahoo / AOL: several per helper session (an older helper
       // without this command gets them one by one below).
@@ -121,18 +145,25 @@ async function prefetchAccount(account) {
             messages.push(await completeAndStore(account, msg, folder));
           }
         }
-        rest = [];
       } catch (e) {
         logDownloadError(account.id, 'email', e);
-        rest = ids.filter((id) => !messages.some((m) => m.id === id));
       }
     }
+    // One by one: the rest, and any the helper left out of its answer (so the
+    // reason is recorded).
+    const rest = ids.filter((id) => !messages.some((m) => m.id === id && m.folder === folder));
     await pool(rest, 3, account.id, 'email', async (id) => {
       const msg = await provider.getMessage(account, id, { folder });
       messages.push(await completeAndStore(account, msg, folder));
     });
   }
+  await noteRun(account.id, { listed: items.length, missing: missing.length, fetched: messages.length });
+  return { items, keys, messages, drafts: rows.drafts ?? [] };
+}
 
+// Attachments and drafts of what prefetchBodies listed.
+async function prefetchFiles(account, { items, keys, messages, drafts }) {
+  const provider = providers[account.provider];
   // Attachments of every listed email (cached or just fetched).
   for (let i = 0; i < items.length; i++) {
     const msg = messages.find((m) => m.id === items[i].id && m.folder === items[i].folder) ?? (await cache.getBody(keys[i]));
@@ -141,7 +172,7 @@ async function prefetchAccount(account) {
 
   // Drafts, as the composer opens them.
   const draftKeys = [];
-  for (const d of rows.drafts ?? []) {
+  for (const d of drafts) {
     const key = cache.draftKey(account.id, d.id);
     draftKeys.push(key);
     const version = cache.draftVersion(d);
