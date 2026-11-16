@@ -4,6 +4,7 @@
 
 import { providers } from './providers/index.js';
 import * as cache from './cache-db.js';
+import { logDownloadError } from './download-log.js';
 
 export function bytesToDataUrl(bytes, mimeType) {
   let bin = '';
@@ -43,16 +44,27 @@ export async function completeAndStore(account, msg, folder) {
   msg.accountId = account.id;
   msg.folder = folder;
   msg.inlineImages = await loadInlineImages(provider, account, msg);
-  if (!msg.encrypted) await cache.putBody(cache.bodyKey(account.id, folder, msg.id), account.id, msg).catch(() => {});
+  if (!msg.encrypted) {
+    await cache.putBody(cache.bodyKey(account.id, folder, msg.id), account.id, msg)
+      .catch((e) => logDownloadError(account.id, 'cache', e));
+  }
   return msg;
 }
 
 // The full email: from the cache, else from the provider (then cached).
-export async function fetchFullMessage(account, messageId, folder) {
+// info, if given, is filled in with where it came from and how long that
+// took: { source: 'cache' | 'server', cacheMs, serverMs }.
+export async function fetchFullMessage(account, messageId, folder, info = {}) {
+  const t0 = performance.now();
   const cached = await cache.getBody(cache.bodyKey(account.id, folder, messageId));
+  info.cacheMs = performance.now() - t0;
+  info.source = cached ? 'cache' : 'server';
   if (cached) return cached;
+  const t1 = performance.now();
   const msg = await providers[account.provider].getMessage(account, messageId, { folder });
-  return completeAndStore(account, msg, folder);
+  const done = await completeAndStore(account, msg, folder);
+  info.serverMs = performance.now() - t1;
+  return done;
 }
 
 // An attachment's bytes: from the cache, else from the provider (then cached).
