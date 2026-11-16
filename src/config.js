@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS = {
   markReadOnOpen: true,
   loadRemoteImages: false,
   showHidden: false,
+  // Diagnostics: a toast with how long each step of opening an email took.
+  showOpenTiming: false,
   notifyEnabled: true,
   soundEnabled: true,
   // How macOS shows Chrome's notifications (System Settings → Notifications →

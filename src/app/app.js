@@ -16,6 +16,7 @@ import { inlineParts } from './inline-images.js';
 import { fmtDate, fmtDateTime, fmtTime } from './format.js';
 import * as cacheDb from '../cache-db.js';
 import { fetchAttachment, fetchFullMessage } from '../message-fetch.js';
+import { lastDownloadError } from '../download-log.js';
 import { dropFromSectionList, getSectionLists, isSectionListKey, putSectionList } from '../section-lists.js';
 import { UPLOADERS, createUploadPanel } from './uploads.js';
 
@@ -102,13 +103,13 @@ const displayName = (a) => a?.name || a?.email || 'Unknown sender';
 // ---------- toast ----------
 
 let toastTimer;
-function toast(text, { error = false } = {}) {
+function toast(text, { error = false, ms } = {}) {
   const el = $('toast');
   el.textContent = text;
   el.className = `toast${error ? ' error' : ''}`;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), error ? 7000 : 3500);
+  toastTimer = setTimeout(() => (el.hidden = true), ms ?? (error ? 7000 : 3500));
 }
 
 // ---------- data loading ----------
@@ -223,6 +224,7 @@ function renderTopbar() {
   $('lastChecked').textContent = lastChecked ? `Checked ${ago(lastChecked)}` : '';
   $('pollMinutes').value = String(state.settings.pollMinutes);
   $('markReadOnOpen').checked = state.settings.markReadOnOpen;
+  $('showOpenTiming').checked = Boolean(state.settings.showOpenTiming);
   $('notifyEnabled').checked = state.settings.notifyEnabled;
   $('soundEnabled').checked = state.settings.soundEnabled;
   $('bannerStyle').value = state.settings.bannerStyle;
@@ -1118,12 +1120,17 @@ let openSeq = 0;
 const MEMORY_LIMIT = 30;
 const bodies = new Map(); // cache key -> message, oldest first
 const bodyLoads = new Map(); // same key -> fetch in progress
+const bodyInfo = new Map(); // same key -> where the copy in memory came from (open timing)
 const bodyKey = (id, messageId, folder) => cacheDb.bodyKey(id, folder, messageId);
 
 function rememberBody(key, msg) {
   bodies.delete(key);
   bodies.set(key, msg);
-  while (bodies.size > MEMORY_LIMIT) bodies.delete(bodies.keys().next().value);
+  while (bodies.size > MEMORY_LIMIT) {
+    const oldest = bodies.keys().next().value;
+    bodies.delete(oldest);
+    bodyInfo.delete(oldest);
+  }
 }
 
 function forgetBody(id, messageId, folder) {
@@ -1137,22 +1144,71 @@ function forgetAccountBodies(id) {
   cacheDb.forgetAccount(id);
 }
 
-function fetchBody(id, messageId, folder) {
+// info, if given, says where the email came from (see reportOpenTiming).
+function fetchBody(id, messageId, folder, info = {}) {
   const key = bodyKey(id, messageId, folder);
   if (bodies.has(key)) {
     const msg = bodies.get(key);
     rememberBody(key, msg);
+    info.source = 'memory';
+    info.first = bodyInfo.get(key);
     return Promise.resolve(msg);
   }
-  if (bodyLoads.has(key)) return bodyLoads.get(key);
-  const load = fetchFullMessage(state.accounts[id], messageId, folder)
+  if (bodyLoads.has(key)) {
+    // Started by hovering; where it comes from is known once it is done.
+    const started = bodyLoads.get(key);
+    return started.then((msg) => {
+      Object.assign(info, started.info, { joined: true });
+      return msg;
+    });
+  }
+  const loadInfo = {};
+  const load = fetchFullMessage(state.accounts[id], messageId, folder, loadInfo)
+    .then((msg) => {
+      Object.assign(info, loadInfo);
+      bodyInfo.set(key, loadInfo);
+      return msg;
+    })
     .then((msg) => {
       if (!msg.encrypted && state.accounts[id]) rememberBody(key, msg);
       return msg;
     })
     .finally(() => bodyLoads.delete(key));
+  load.info = loadInfo;
   bodyLoads.set(key, load);
   return load;
+}
+
+// ---------- open timing (Settings → Show timing when opening an email) ----------
+//
+// How long each step of opening an email took, and whether it came from the
+// offline cache. Always written to the console; shown as a toast when the
+// setting is on. t: { click, listed, fetched, prepared, drawn } (performance.now()).
+async function reportOpenTiming(id, info, t) {
+  const ms = (a, b) => `${Math.round(b - a)} ms`;
+  const from = {
+    memory: 'already in memory' + (info.first?.source === 'server'
+      ? ` (was NOT cached: fetched from the server in ${Math.round(info.first.serverMs ?? 0)} ms when hovered or first opened)`
+      : info.first ? ' (first read from the offline cache)' : ''),
+    cache: `offline cache ${ms(t.listed, t.fetched)}`,
+    server: `NOT cached, fetched from the server ${ms(t.listed, t.fetched)}`,
+  }[info.source] ?? `fetch ${ms(t.listed, t.fetched)}`;
+  const parts = [
+    `Opened in ${ms(t.click, t.drawn)}`,
+    `list ${ms(t.click, t.listed)}`,
+    from + (info.joined ? ' (started on hover)' : ''),
+    `prepare ${ms(t.fetched, t.prepared)}`,
+    `draw ${ms(t.prepared, t.drawn)}`,
+  ];
+  if (info.source === 'server') {
+    const err = await lastDownloadError(id).catch(() => null);
+    parts.push(err
+      ? `last background download error (${err.what}, ${ago(err.at)}${err.count > 1 ? `, ${err.count}×` : ''}): ${err.message}`
+      : 'no background download error recorded');
+  }
+  const text = parts.join(' · ');
+  console.info('[open]', text);
+  if (state.settings.showOpenTiming) toast(text, { ms: 15000 });
 }
 
 // Read or unread as the lists show it now (a cached copy may be older).
@@ -1178,6 +1234,8 @@ function prefetchOnHover(button) {
 }
 
 async function openMessage(id, messageId, { folder, list } = {}) {
+  const t = { click: performance.now() };
+  const info = {};
   uploads?.close();
   const seq = ++openSeq;
   state.selected = { accountId: id, messageId, folder, list };
@@ -1187,14 +1245,25 @@ async function openMessage(id, messageId, { folder, list } = {}) {
   renderSidebar();
   if (!bodies.has(bodyKey(id, messageId, folder))) reader.innerHTML = `<div class="reader-status">Loading…</div>`;
 
+  t.listed = performance.now();
+
   try {
-    const msg = await fetchBody(id, messageId, folder);
+    const msg = await fetchBody(id, messageId, folder, info);
+    t.fetched = performance.now();
     if (seq !== openSeq) return;
     const listed = listedReadState(id, messageId, folder);
     if (listed !== undefined) msg.isRead = listed;
     state.message = msg;
     rememberAddresses([msg.from, ...(msg.to ?? []), ...(msg.cc ?? [])], 1);
     renderReader();
+    t.prepared = performance.now();
+    const done = () => {
+      t.drawn = performance.now();
+      if (seq === openSeq) reportOpenTiming(id, info, t);
+    };
+    const frame = reader.querySelector('iframe');
+    if (frame) frame.addEventListener('load', done, { once: true });
+    else done();
     // An encrypted body that could not be shown does not count as read.
     if (state.settings.markReadOnOpen && !msg.isRead && !msg.encrypted) {
       setRead(id, messageId, true, folder).catch((e) => toast(`Couldn't mark as read: ${e.message}`, { error: true }));
@@ -1494,6 +1563,7 @@ function closeHelpTips() {
 $('pollMinutes').addEventListener('change', (e) => saveSettings({ pollMinutes: Number(e.target.value) }));
 $('markReadOnOpen').addEventListener('change', (e) => saveSettings({ markReadOnOpen: e.target.checked }));
 $('loadRemoteImages').addEventListener('change', (e) => saveSettings({ loadRemoteImages: e.target.checked }));
+$('showOpenTiming').addEventListener('change', (e) => saveSettings({ showOpenTiming: e.target.checked }));
 $('notifyEnabled').addEventListener('change', (e) => saveSettings({ notifyEnabled: e.target.checked }));
 $('soundEnabled').addEventListener('change', (e) => saveSettings({ soundEnabled: e.target.checked }));
 $('bannerStyle').addEventListener('change', (e) => saveSettings({ bannerStyle: e.target.value, bannerStyleChosen: true }));

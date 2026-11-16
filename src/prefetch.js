@@ -12,6 +12,7 @@ import * as cache from './cache-db.js';
 import { completeAndStore } from './message-fetch.js';
 import { mediaKind } from './media-types.js';
 import { putSectionList } from './section-lists.js';
+import { logDownloadError } from './download-log.js';
 
 const SECTIONS_EVERY = 15 * 60e3;
 // Videos larger than this download when opened (and are cached then).
@@ -52,7 +53,7 @@ async function run() {
       try {
         await prefetchAccount(account);
       } catch (e) {
-        console.debug('[prefetch]', account.id, e.message);
+        logDownloadError(account.id, 'account', e);
       }
     }
     await cache.trim(cacheLimitBytes(await getSettings()));
@@ -122,11 +123,11 @@ async function prefetchAccount(account) {
         }
         rest = [];
       } catch (e) {
-        console.debug('[prefetch]', e.message);
+        logDownloadError(account.id, 'email', e);
         rest = ids.filter((id) => !messages.some((m) => m.id === id));
       }
     }
-    await pool(rest, 3, async (id) => {
+    await pool(rest, 3, account.id, 'email', async (id) => {
       const msg = await provider.getMessage(account, id, { folder });
       messages.push(await completeAndStore(account, msg, folder));
     });
@@ -169,17 +170,17 @@ async function prefetchAttachments(account, provider, msg) {
       for (const a of missing) if (got[a.id]) await cache.putAttachment(keyOf(a), account.id, got[a.id]);
       rest = missing.filter((a) => !got[a.id]);
     } catch (e) {
-      console.debug('[prefetch]', e.message);
+      logDownloadError(account.id, 'attachment', e);
     }
   }
-  await pool(rest, 2, async (a) => {
+  await pool(rest, 2, account.id, 'attachment', async (a) => {
     const bytes = await provider.getAttachment(account, msg.id, a, { folder: msg.folder });
     await cache.putAttachment(keyOf(a), account.id, bytes);
   });
 }
 
-// Runs fn over items, `limit` at a time; failures are skipped.
-async function pool(items, limit, fn) {
+// Runs fn over items, `limit` at a time; failures are recorded and skipped.
+async function pool(items, limit, accountId, what, fn) {
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length) {
@@ -187,7 +188,7 @@ async function pool(items, limit, fn) {
       try {
         await fn(item);
       } catch (e) {
-        console.debug('[prefetch]', e.message);
+        logDownloadError(accountId, what, e);
       }
     }
   }));
