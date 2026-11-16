@@ -1,7 +1,8 @@
 // Background downloader for the offline cache: every email the app lists
 // (unread, Recently read, Sent, Drafts, Spam) is fetched with its inline
 // images and attachments as soon as it appears, so it opens instantly
-// (videos over 50 MB wait until they are opened).
+// (videos over 50 MB wait until they are opened). With "Always load remote
+// images" on, its web images are saved with it too.
 // Fetching never marks anything read. Runs in the service worker after each
 // check and whenever a list changes; the section lists (Recently read, Sent,
 // Drafts, Spam) are re-read at most every 15 minutes per account, and also by
@@ -12,6 +13,7 @@ import { getAccounts, getMail, getSettings } from './storage.js';
 import * as cache from './cache-db.js';
 import { completeAndStore } from './message-fetch.js';
 import { mediaKind } from './media-types.js';
+import { saveRemoteImages } from './remote-images.js';
 import { getSectionLists, putSectionList } from './section-lists.js';
 import { logDownloadError, noteRun } from './download-log.js';
 
@@ -44,6 +46,7 @@ export const cacheLimitBytes = (settings) => (Number(settings.cacheLimitMB) || 0
 // A stalled request (the network changed, the computer slept) must not stop
 // the downloader for good: each account's step gives up after this long.
 const BODIES_TIMEOUT = 3 * 60e3;
+const IMAGES_TIMEOUT = 5 * 60e3;
 const FILES_TIMEOUT = 15 * 60e3;
 const RUN_TIMEOUT = 45 * 60e3;
 let runningSince = 0;
@@ -75,6 +78,18 @@ async function run() {
         logDownloadError(account.id, 'account', e);
       }
     }));
+    // Only while "Always load remote images" is on: fetching them tells the
+    // sender the email was opened.
+    if ((await getSettings()).loadRemoteImages) {
+      await Promise.all(accounts.map(async (account) => {
+        if (!listed.has(account.id)) return;
+        try {
+          await withTimeout(prefetchImages(account, listed.get(account.id)), IMAGES_TIMEOUT, 'Downloading web images');
+        } catch (e) {
+          logDownloadError(account.id, 'account', e);
+        }
+      }));
+    }
     for (const account of accounts) {
       if (!listed.has(account.id)) continue;
       try {
@@ -158,17 +173,28 @@ async function prefetchBodies(account) {
     });
   }
   await noteRun(account.id, { listed: items.length, missing: missing.length, fetched: messages.length });
-  return { items, keys, messages, drafts: rows.drafts ?? [] };
+
+  // Every listed email as cached (or just fetched), for the steps below.
+  const listed = [];
+  for (let i = 0; i < items.length; i++) {
+    const msg = messages.find((m) => m.id === items[i].id && m.folder === items[i].folder) ?? (await cache.getBody(keys[i]));
+    if (msg) listed.push({ key: keys[i], msg });
+  }
+  return { listed, drafts: rows.drafts ?? [] };
+}
+
+// Web images, saved with each listed email (see remote-images.js).
+async function prefetchImages(account, { listed }) {
+  await pool(listed, 3, account.id, 'email', async ({ key, msg }) => {
+    if (await saveRemoteImages(msg)) await cache.putBody(key, account.id, msg);
+  });
 }
 
 // Attachments and drafts of what prefetchBodies listed.
-async function prefetchFiles(account, { items, keys, messages, drafts }) {
+async function prefetchFiles(account, { listed, drafts }) {
   const provider = providers[account.provider];
   // Attachments of every listed email (cached or just fetched).
-  for (let i = 0; i < items.length; i++) {
-    const msg = messages.find((m) => m.id === items[i].id && m.folder === items[i].folder) ?? (await cache.getBody(keys[i]));
-    if (msg) await prefetchAttachments(account, provider, msg);
-  }
+  for (const { msg } of listed) await prefetchAttachments(account, provider, msg);
 
   // Drafts, as the composer opens them.
   const draftKeys = [];
