@@ -1199,7 +1199,7 @@ async function reportOpenTiming(id, info, t, where, shown) {
     from + (info.joined ? ' (started on hover)' : ''),
     `prepare ${ms(t.fetched, t.prepared)}`,
     `draw ${ms(t.prepared, t.drawn)}` + (shown
-      ? ` (${Math.round(shown.size / 1024)} KB, ${shown.inline} inline images, ${shown.remoteImages} remote images ${shown.allowRemote ? 'loaded from the web' : 'blocked'})`
+      ? ` (${Math.round(shown.size / 1024)} KB, ${shown.inline} inline images, ${shown.allowRemote ? `${shown.saved} web images saved with the email, ` : ''}${shown.remoteImages} remote images ${shown.allowRemote ? 'loaded from the web' : 'blocked'})`
       : ''),
     where,
   ];
@@ -1291,7 +1291,7 @@ function renderReader() {
   const allowRemote = state.settings.loadRemoteImages || state.showRemoteImages;
   const { srcdoc, remoteImages } = msg.encrypted
     ? { srcdoc: '', remoteImages: 0 }
-    : buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineParts: inlineParts(msg) });
+    : buildEmailDocument(msg, { allowRemoteImages: allowRemote, inlineParts: inlineParts(msg), savedImages: msg.remoteImages });
   const files = msg.attachments.filter((x) => !x.inline);
   const rcpt = (label, list) =>
     list.length ? `<div class="meta-rcpt" title="${esc(list.map((r) => r.email).join(', '))}">${label} ${esc(list.map(displayName).join(', '))}</div>` : '';
@@ -1322,7 +1322,7 @@ function renderReader() {
   if (!msg.encrypted) reader.querySelector('iframe').srcdoc = srcdoc;
   renderReaderToolbar();
   // For the open timing.
-  return { size: srcdoc.length, remoteImages, allowRemote, inline: msg.inlineImages?.size ?? 0 };
+  return { size: srcdoc.length, remoteImages, allowRemote, inline: msg.inlineImages?.size ?? 0, saved: msg.remoteImages?.size ?? 0 };
 }
 
 function renderReaderToolbar() {

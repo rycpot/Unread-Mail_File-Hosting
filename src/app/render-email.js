@@ -40,7 +40,9 @@ function textToHtml(text) {
 }
 
 // inlineParts: [{ contentId, filename, url (data:) }] of the email's inline images.
-export function buildEmailDocument({ html, text }, { allowRemoteImages, inlineParts = [] }) {
+// savedImages: Map of image URL -> data: URL, the email's web images saved
+// with it (src/remote-images.js); used only when remote images are allowed.
+export function buildEmailDocument({ html, text }, { allowRemoteImages, inlineParts = [], savedImages }) {
   const doc = DOMPurify.sanitize(html ?? textToHtml(text), {
     WHOLE_DOCUMENT: true,
     RETURN_DOM: true,
@@ -50,6 +52,7 @@ export function buildEmailDocument({ html, text }, { allowRemoteImages, inlinePa
 
   let remoteImages = 0;
   linkInlineImages(doc, inlineParts);
+  if (allowRemoteImages && savedImages?.size) useSavedImages(doc, savedImages);
   for (const img of doc.querySelectorAll('img[src]')) {
     const src = img.getAttribute('src');
     if (/^(cid:|data:)/i.test(src)) {
@@ -79,6 +82,36 @@ export function buildEmailDocument({ html, text }, { allowRemoteImages, inlinePa
   );
 
   return { srcdoc: '<!doctype html>' + doc.documentElement.outerHTML, remoteImages };
+}
+
+// Points the email at the saved copies of its web images, so showing it
+// needs no network. Anything not saved still loads from the web.
+function useSavedImages(doc, saved) {
+  const find = (raw) => {
+    const url = (raw ?? '').trim();
+    return saved.get(url.startsWith('//') ? `https:${url}` : url);
+  };
+  for (const img of doc.querySelectorAll('img[src]')) {
+    const data = find(img.getAttribute('src'));
+    if (!data) continue;
+    img.setAttribute('src', data);
+    img.removeAttribute('srcset');
+  }
+  for (const el of doc.querySelectorAll('[background]')) {
+    const data = find(el.getAttribute('background'));
+    if (data) el.setAttribute('background', data);
+  }
+  const inCss = (css) => css.replace(/url\(\s*(["']?)\s*((?:https?:)?\/\/[^)"']+?)\s*\1\s*\)/gi, (all, _q, url) => {
+    const data = find(url);
+    return data ? `url("${data}")` : all;
+  });
+  for (const el of doc.querySelectorAll('[style]')) {
+    const css = el.getAttribute('style');
+    if (CSS_REMOTE_URL.test(css)) el.setAttribute('style', inCss(css));
+  }
+  for (const style of doc.querySelectorAll('style')) {
+    if (CSS_REMOTE_URL.test(style.textContent)) style.textContent = inCss(style.textContent);
+  }
 }
 
 export function bytesToDataUrl(bytes, mimeType) {
